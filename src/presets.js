@@ -60,6 +60,10 @@ export const TREE_DEFAULT = {
   rootButtress:     0.10,  // minimal buttressing
   rootBranchiness:  0.45,  // moderate sub-root branching
   rootTaper:        0.50,  // neutral taper
+  // Bark + weep genes (draws 36–38)
+  barkColor:        1.00,  // brown bark (1.0 = furrowed-brown identity)
+  barkPattern:      1.00,  // deep furrows (identity)
+  weep:             0.00,  // no pendulous droop
 };
 
 // ---------------------------------------------------------------------------
@@ -124,6 +128,8 @@ export const PRESETS = [
       leafLobing:       0.00,  // simple ovate, no lobing
       leafTip:          0.35,  // pointed acuminate tip
       pigment:          0.30,
+      barkColor:        0.05,  // pale white/cream — classic birch bark
+      barkPattern:      0.10,  // smooth with lenticels, not furrowed
       structuralSeed:   0x7F3A1E05 >>> 0,
     },
   },
@@ -184,6 +190,7 @@ export const PRESETS = [
       pigment:          0.34,
       rootCount:        0.50,
       rootSpread:       0.60,
+      weep:             0.90,  // KEY: strong pendulous weep gene
       structuralSeed:   0xE5D2A0F7 >>> 0,
     },
   },

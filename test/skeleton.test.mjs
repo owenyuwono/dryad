@@ -537,6 +537,24 @@ test('skeleton emits ZERO isRoot nodes (root system is out-of-band via roots.js)
 });
 
 // ---------------------------------------------------------------------------
+// WEEP GENE — skeleton-level no-op guarantee
+// ---------------------------------------------------------------------------
+
+test('WEEP: genome.weep gene has NO effect on buildSkeleton output (skeleton is weep-agnostic)', () => {
+  // The weep gene is applied purely in the proportions stage.
+  // buildSkeleton must produce byte-identical topology for weep=0 vs weep=1.
+  for (let seed = 0; seed < 10; seed++) {
+    const gNoWeep  = buildSkeleton(makeGenome({ weep: 0 }), mulberry32(seed));
+    const gWithWeep = buildSkeleton(makeGenome({ weep: 1 }), mulberry32(seed));
+    assert.deepStrictEqual(
+      gNoWeep,
+      gWithWeep,
+      `seed=${seed}: buildSkeleton output must be identical for weep=0 vs weep=1`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RADIAL ORDER integration with buildSkeleton
 // ---------------------------------------------------------------------------
 

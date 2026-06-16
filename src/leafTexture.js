@@ -290,28 +290,64 @@ export function clusterLeafCount(seed) {
  *
  * Gene → param mappings:
  *   leafWidth    → xScale: [0.4, 1.6]  post-normalization x-scale; 0=narrow, 1=broad.
- *                  (n2 is fixed at 4 for a clean ovate base; width is via xScale
- *                  applied AFTER y-normalization so it scales the whole outline uniformly.)
- *   leafLength   → axialStretch: [1.0, 4.0]  (short/round → long/lanceolate)
- *   leafTip      → n1: [0.4, 2.5]  (low = pointed/acuminate, high = rounded/obtuse)
- *   leafSerration→ serration: [0, 0.12]; serrationFreq: [6, 18]
- *   leafLobing   → m: [2, 5]  (2 = simple ovate; 5 = palmate; non-integer = partial)
+ *                  (width is via xScale applied AFTER y-normalization so it scales
+ *                  the whole outline uniformly.)
+ *   leafLength   → axialStretch: [1.0, 4.0] at zero lobing; pulled toward 1.1 at full
+ *                  lobing so high-lobing leaves are palmate (roughly as wide as long).
+ *   leafTip      → n1 base: [0.4, 2.5] — low=pointed/acuminate, high=rounded/obtuse.
+ *                  At high leafLobing, n1 is additionally reduced to sharpen lobe tips
+ *                  (maple lobes are acute).
+ *   leafSerration→ serration: [0, 0.12]; serrationFreq: [6, 18]. At high leafLobing
+ *                  the serration amplitude is boosted so lobe edges get maple-like teeth.
+ *   leafLobing   → m: [2, 5]  (2 = simple ovate; 5 = palmate)
+ *                  n2/n3: ramp from 4 (smooth ovate) → 14 (deep-sinus maple) as lobing rises.
+ *                  Deep sinuses emerge because high n2/n3 pull the radial minima (between
+ *                  lobes) far toward the origin while the lobe tips stay near r=1.
  *
- * Default (simple ovate): leafWidth=0.5 → xScale=1.0, leafTip=0.4 → n1≈1.24,
- *   leafLength=0.45 → axialStretch=2.35, leafSerration=0, leafLobing=0 → m=2.
+ * Default (simple ovate): leafLobing=0 → m=2, n2=n3=4, axialStretch driven by leafLength,
+ *   serration unmodified — identical to the previous behaviour at leafLobing=0.
+ *
+ * Maple region: leafLobing=1 → m=5, n2=n3=14, n1 sharper, axialStretch≈1.1 (wide),
+ *   serration boosted by ~2×.
  */
 export function leafBaseParams(genes) {
   const { leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4, leafSerration = 0, leafLobing = 0 } = genes;
-  const m             = 2 + leafLobing * 3;              // [2, 5] — lobe count
-  const n1            = 0.4 + leafTip * 2.1;             // [0.4, 2.5] — low=sharp tip, high=round
-  const n2            = 4;                               // fixed: baseline ovate outline
-  const n3            = 4;                               // symmetric
-  const a             = 1.0;
-  const b             = 1.0;
-  const axialStretch  = 1.0 + leafLength * 3.0;          // [1.0, 4.0] — low=round, high=elongated
-  const xScale        = 0.4 + leafWidth * 1.2;           // [0.4, 1.6] — low=narrow, high=broad
-  const serration     = leafSerration * 0.12;             // [0, 0.12]
-  const serrationFreq = 6 + leafSerration * 12;           // [6, 18]
+
+  // Lobe count: 2 (ovate) → 5 (5-lobed palmate maple)
+  const m = 2 + leafLobing * 3;
+
+  // Superformula exponents — the key to sinus depth.
+  // At leafLobing=0: n2=n3=4 → smooth ovate (unchanged).
+  // At leafLobing=1: n2=n3=14 → the superformula cos/sin terms are raised to a high power,
+  // which makes the radial minima (inter-lobe valleys) collapse deeply toward the center
+  // while the lobe maxima (cos/sin≈1 sectors) stay near r=1.  This gives maple-depth sinuses.
+  const n2 = 4 + leafLobing * 10;
+  const n3 = 4 + leafLobing * 10;
+
+  // Lobe-tip sharpness.  Base n1 from leafTip gene.  As lobing rises we reduce n1 further
+  // (sharper superformula tip) so the individual lobe apices are acute (maple-like pointed).
+  // At leafLobing=0 the reduction is 0, so simple leaves are unaffected.
+  const n1Base = 0.4 + leafTip * 2.1;            // [0.4, 2.5]
+  const n1 = n1Base * (1 - leafLobing * 0.35);   // at full lobing: ×0.65 → sharper lobe tips
+
+  const a = 1.0;
+  const b = 1.0;
+
+  // Palmate proportions: a real maple is roughly as wide as long.
+  // At leafLobing=0 axialStretch is fully driven by leafLength [1.0,4.0].
+  // At leafLobing=1 it is pulled toward 1.1 so the outline is near-circular before xScale.
+  const axialStretchBase = 1.0 + leafLength * 3.0;  // [1.0, 4.0]
+  const axialStretch = axialStretchBase * (1 - leafLobing * 0.72) + 1.1 * leafLobing * 0.72;
+
+  // Width: unchanged — xScale is the post-normalisation horizontal scale.
+  const xScale = 0.4 + leafWidth * 1.2;             // [0.4, 1.6]
+
+  // Serration: boost amplitude on lobe edges at high lobing (maple teeth).
+  // At leafLobing=0 the boost is 0, preserving the existing simple-leaf behaviour.
+  const serrationBoost = 1 + leafLobing * 1.8;      // [1×, 2.8×]
+  const serration     = leafSerration * 0.12 * serrationBoost;
+  const serrationFreq = 6 + leafSerration * 12;
+
   return { m, n1, n2, n3, a, b, axialStretch, xScale, serration, serrationFreq };
 }
 

@@ -64,6 +64,10 @@ function makeFloraParent() {
     leafTip:          0.40,
     leafSerration:    0.00,
     leafLobing:       0.00,
+    // bark + weep genes (draws 36-38)
+    barkColor:        0.85,
+    barkPattern:      0.80,
+    weep:             0.00,
     structuralSeed:   0xDEADBEEF,
     // root system tier (added Task 1 — required so genomeDistance is non-NaN)
     rootCount:        0.45,

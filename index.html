@@ -519,7 +519,15 @@
       <input type="range" id="spininessSlider" min="0" max="1" step="0.01" value="0.05"
              data-gene="spininess" data-display="spininessVal">
 
-      <div class="hint">High succulence → swollen cactus body. Low → bark trunk.</div>
+      <label><span class="lname">Bark color</span><span class="val" id="barkColorVal">0.85</span></label>
+      <input type="range" id="barkColorSlider" min="0" max="1" step="0.01" value="0.85"
+             data-gene="barkColor" data-display="barkColorVal">
+
+      <label><span class="lname">Bark pattern</span><span class="val" id="barkPatternVal">0.80</span></label>
+      <input type="range" id="barkPatternSlider" min="0" max="1" step="0.01" value="0.80"
+             data-gene="barkPattern" data-display="barkPatternVal">
+
+      <div class="hint">High succulence → swollen cactus body. Low → bark trunk. Bark color: 0=white birch, 1=dark brown. Bark pattern: 0=smooth, 1=furrowed.</div>
     </div>
 
     <!-- ── APPENDAGE ──────────────────────────────────── -->
@@ -563,7 +571,11 @@
       <input type="range" id="droopBiasSlider" min="-0.2" max="0.4" step="0.01" value="0.1"
              data-gene="droopBias" data-display="droopBiasVal">
 
-      <div class="hint">Droop bias negative → upswept; positive → weeping form.</div>
+      <label><span class="lname">Weep</span><span class="val" id="weepVal">0.00</span></label>
+      <input type="range" id="weepSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="weep" data-display="weepVal">
+
+      <div class="hint">Droop bias negative → upswept; positive → weeping form. Weep: 0=no-op, 1=strongly pendulous.</div>
     </div>
 
     <!-- ── COSMETIC ───────────────────────────────────── -->

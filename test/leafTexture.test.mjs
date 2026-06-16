@@ -351,3 +351,133 @@ test('superformulaOutline is deterministic: same genes → identical outline', (
   const o2 = makeOutline(genes, 120);
   assert.deepStrictEqual(o1, o2, 'outline should be identical for same gene inputs');
 });
+
+// ---------------------------------------------------------------------------
+// Maple-region tests — high leafLobing produces palmate maple-like shape
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the raw superformula radii for a given gene set.
+ * Works directly on the un-rotated polar form so lobe/sinus counting is unambiguous.
+ */
+function rawRadii(genes, steps = 720) {
+  const params = leafBaseParams(genes);
+  const { m, n1, n2, n3, a = 1, b = 1 } = params;
+  const radii = [];
+  for (let i = 0; i < steps; i++) {
+    const theta = (2 * Math.PI * i) / steps;
+    const t = m * theta / 4;
+    const cosT = Math.abs(Math.cos(t) / a);
+    const sinT = Math.abs(Math.sin(t) / b);
+    const inner = Math.pow(cosT, n2) + Math.pow(sinT, n3);
+    const r = inner === 0 ? 0 : Math.pow(inner, -1 / n1);
+    radii.push(Number.isFinite(r) ? r : 0);
+  }
+  return radii;
+}
+
+/** Smooth a circular array with a 5-sample box filter to eliminate sampling noise. */
+function smooth5(arr) {
+  const N = arr.length;
+  return arr.map((_, i) => {
+    let s = 0;
+    for (let d = -2; d <= 2; d++) s += arr[(i + d + N) % N];
+    return s / 5;
+  });
+}
+
+/** Count local peaks in a (smoothed) circular signal. */
+function countPeaks(arr) {
+  const N = arr.length;
+  let count = 0;
+  for (let i = 0; i < N; i++) {
+    const prev = arr[(i - 1 + N) % N];
+    const next = arr[(i + 1) % N];
+    if (arr[i] > prev && arr[i] > next) count++;
+  }
+  return count;
+}
+
+/** min(r) / max(r) ratio — 1.0 = no sinus; near 0 = deep maple sinuses. */
+function sinusDepthRatio(radii) {
+  const maxR = Math.max(...radii);
+  const minR = Math.min(...radii);
+  return minR / maxR;
+}
+
+test('maple: high leafLobing → 5 radial lobe peaks', () => {
+  const genes = { leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 1.0 };
+  const peaks = countPeaks(smooth5(rawRadii(genes)));
+  assert.strictEqual(peaks, 5, `expected 5 lobe peaks for leafLobing=1, got ${peaks}`);
+});
+
+test('maple: sinus depth increases monotonically with leafLobing', () => {
+  const levels = [0.0, 0.25, 0.5, 0.75, 1.0];
+  const ratios = levels.map(l => sinusDepthRatio(rawRadii({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: l })));
+  for (let i = 1; i < ratios.length; i++) {
+    assert.ok(
+      ratios[i] < ratios[i - 1],
+      `sinus depth ratio should decrease (deeper sinuses) as leafLobing rises: ${levels[i-1]}→${levels[i]} got ${ratios[i-1].toFixed(4)}→${ratios[i].toFixed(4)}`
+    );
+  }
+});
+
+test('maple: high leafLobing sinus depth ratio < 0.02 (deep maple notches)', () => {
+  const genes = { leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 1.0 };
+  const ratio = sinusDepthRatio(rawRadii(genes));
+  assert.ok(ratio < 0.02, `expected deep sinuses (ratio<0.02) at leafLobing=1, got ${ratio.toFixed(5)}`);
+});
+
+test('maple: low leafLobing (0) sinus depth ratio > 0.45 (smooth ovate, no deep notches)', () => {
+  const genes = { leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 0.0 };
+  const ratio = sinusDepthRatio(rawRadii(genes));
+  assert.ok(ratio > 0.45, `expected smooth ovate (ratio>0.45) at leafLobing=0, got ${ratio.toFixed(5)}`);
+});
+
+test('maple: high leafLobing → lobe tips are pointed (n1 decreases with lobing)', () => {
+  // Lower n1 in the superformula → sharper/more pointed lobe apices.
+  const low  = leafBaseParams({ leafLobing: 0.0 });
+  const high = leafBaseParams({ leafLobing: 1.0 });
+  assert.ok(high.n1 < low.n1, `n1 should decrease with leafLobing: ${low.n1.toFixed(3)} → ${high.n1.toFixed(3)}`);
+});
+
+test('maple: high leafLobing → wider aspect ratio (palmate proportions)', () => {
+  // A palmate leaf is roughly as wide as tall; at lobing=0 the outline is tall and narrow.
+  const lo = aspectRatio(makeOutline({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 0.0 }));
+  const hi = aspectRatio(makeOutline({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 1.0 }));
+  assert.ok(hi > lo * 2, `high-lobing aspect ratio (${hi.toFixed(3)}) should be at least 2× wider than low-lobing (${lo.toFixed(3)})`);
+});
+
+test('maple: leafSerration boosts are additive with leafLobing (teeth on lobe edges)', () => {
+  // At high lobing, serration amplitude is boosted — perimeter of serrated+lobed > lobed alone.
+  const lobedOnly     = leafBaseParams({ leafLobing: 1.0, leafSerration: 0.5 });
+  const lobedSerrated = leafBaseParams({ leafLobing: 1.0, leafSerration: 1.0 });
+  assert.ok(
+    lobedSerrated.serration > lobedOnly.serration,
+    `higher leafSerration should increase serration at high lobing: ${lobedOnly.serration.toFixed(4)} → ${lobedSerrated.serration.toFixed(4)}`
+  );
+  // The boost factor means serration is larger at high lobing vs low lobing for same gene value
+  const lowLobing  = leafBaseParams({ leafLobing: 0.0, leafSerration: 0.5 });
+  const highLobing = leafBaseParams({ leafLobing: 1.0, leafSerration: 0.5 });
+  assert.ok(
+    highLobing.serration > lowLobing.serration,
+    `serration amplitude at high lobing (${highLobing.serration.toFixed(4)}) should exceed low lobing (${lowLobing.serration.toFixed(4)}) for same leafSerration gene`
+  );
+});
+
+test('maple: simple-ovate (leafLobing=0) outline is smooth — no radial peaks besides the 2 expected', () => {
+  const genes = { leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 0.0 };
+  const peaks = countPeaks(smooth5(rawRadii(genes)));
+  // A simple ovate (m=2) has exactly 2 peaks (left and right of tip in the superformula)
+  assert.strictEqual(peaks, 2, `expected 2 peaks for simple ovate (leafLobing=0), got ${peaks}`);
+});
+
+test('maple: determinism — same genes → identical leafBaseParams and outline', () => {
+  const genes = { leafWidth: 0.6, leafLength: 0.3, leafTip: 0.5, leafSerration: 0.4, leafLobing: 1.0 };
+  const p1 = leafBaseParams(genes);
+  const p2 = leafBaseParams(genes);
+  assert.deepStrictEqual(p1, p2, 'leafBaseParams should be deterministic');
+  const o1 = makeOutline(genes, 360);
+  const o2 = makeOutline(genes, 360);
+  assert.deepStrictEqual(o1, o2, 'outline should be deterministic for maple genes');
+});

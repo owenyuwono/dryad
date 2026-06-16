@@ -709,13 +709,16 @@ export function createViewer(canvas) {
         resolved.lightDir[2]
       ).normalize();
 
-      // setGenome() is the correct API on barkCtl — updates uWoodiness/uPigment
-      // uniforms in-place without triggering a shader recompile.
+      // setGenome() is the correct API on barkCtl — updates uniforms in-place
+      // without triggering a shader recompile.
       // lightDir/skyColor/groundColor are not bark uniforms; they drive the scene
       // lights and are handled below via sunLight + setSkyFromLightDir.
+      // barkColor/barkPattern default-guarded in case the genome gene isn't wired yet.
       barkCtl.setGenome({
-        woodiness: resolved.woodiness ?? 0.88,
-        pigment:   resolved.pigment,
+        woodiness:   resolved.woodiness   ?? 0.88,
+        pigment:     resolved.pigment,
+        barkColor:   resolved.barkColor   ?? 1.0,
+        barkPattern: resolved.barkPattern ?? 1.0,
       });
 
       // Align the procedural sky's sun with the scene light direction so the

@@ -61,12 +61,22 @@ const float BARK_BUMP_MAX           = 1.40;
 const float BARK_PLATE_FREQ         = 2.8;
 const float BARK_CRACK_WIDTH        = 6.0;
 const float BARK_CRACK_DEPTH        = 0.45;
+
+// Brown-bark palette (barkColor → 1)
 const vec3  BARK_COLOR_RIDGE        = vec3(0.36, 0.24, 0.13);
 const vec3  BARK_COLOR_FURROW       = vec3(0.14, 0.11, 0.09);
 const vec3  BARK_COLOR_INNER        = vec3(0.42, 0.19, 0.08);
 const vec3  BARK_COLOR_LICHEN       = vec3(0.48, 0.53, 0.33);
 const vec3  BARK_COLOR_BLOTCH_WARM  = vec3(0.30, 0.19, 0.10);
 const vec3  BARK_COLOR_BLOTCH_COOL  = vec3(0.18, 0.15, 0.12);
+
+// Birch-bark palette (barkColor → 0)
+const vec3  BIRCH_COLOR_RIDGE       = vec3(0.92, 0.90, 0.86);
+const vec3  BIRCH_COLOR_FURROW      = vec3(0.78, 0.76, 0.73);
+const vec3  BIRCH_COLOR_INNER       = vec3(0.96, 0.94, 0.90);
+const vec3  BIRCH_COLOR_LICHEN      = vec3(0.62, 0.68, 0.52);
+const vec3  BIRCH_COLOR_BLOTCH_WARM = vec3(0.88, 0.84, 0.78);
+const vec3  BIRCH_COLOR_BLOTCH_COOL = vec3(0.72, 0.70, 0.68);
 
 // ============================================================
 // BARK HELPERS (verbatim from creature.frag.glsl:343–537)
@@ -208,10 +218,61 @@ float barkVoronoiEdge(vec2 q) {
     return clamp(edge * BARK_CRACK_WIDTH, 0.0, 1.0);
 }
 
+// Horizontal lenticel marks for birch-like bark.
+// Returns [0,1] where 1 = inside a dark lenticel dash.
+// lenticels are horizontal short dashes, keyed by integer height-band × angle.
+// prominence: strength of the effect, scaled by (1 - uBarkPattern).
+float barkLenticel(vec3 p_grain, float prominence) {
+    if (prominence < 0.001) return 0.0;
+
+    // Height-band index: lenticels appear at regular vertical intervals.
+    // Y is stretched 3x in p_grain, so divide back to get world-scale bands.
+    float bandY     = p_grain.y / 3.0;           // undo y-stretch for band spacing
+    float bandIndex = floor(bandY * 5.0);         // ~5 bands per unit height
+    float bandFrac  = fract(bandY * 5.0);         // 0..1 within the band
+
+    // Horizontal angle from object-space xz (assumes cylinder-ish trunk).
+    float angle = atan(p_grain.z, p_grain.x);    // -PI..PI
+
+    // Per-band pseudo-random offset of dash start (varies each band).
+    float bandHash = fract(sin(bandIndex * 127.1 + 311.7) * 43758.5);
+    // Multiple dashes per ring: divide angle into sectors (e.g. 4-6 per ring).
+    float sectors    = 5.0;
+    float sectorAngle = 6.28318 / sectors;
+    float sectorFrac  = fract((angle / sectorAngle) + bandHash);
+
+    // Dash shape: elongated horizontally (short in the sectorFrac direction,
+    // narrow in the vertical bandFrac direction).
+    // centerSector: 1 at the center of a dash, 0 at edges.
+    float dashWidth  = 0.35;  // fraction of sector width occupied by the dash
+    float dashHeight = 0.18;  // fraction of band height
+    float dashCenterH = smoothstep(0.5 - dashWidth,  0.5 - dashWidth  * 0.3, sectorFrac)
+                      * (1.0 - smoothstep(0.5 + dashWidth  * 0.3, 0.5 + dashWidth,  sectorFrac));
+    float dashCenterV = smoothstep(0.5 - dashHeight, 0.5 - dashHeight * 0.3, bandFrac)
+                      * (1.0 - smoothstep(0.5 + dashHeight * 0.3, 0.5 + dashHeight, bandFrac));
+    float dashMask = dashCenterH * dashCenterV;
+
+    // Vary dash presence per band (not every band/sector has a lenticel).
+    float presenceHash = fract(sin(bandIndex * 73.13 + floor(sectorFrac * sectors + bandHash) * 57.3) * 91027.3);
+    float present = step(0.45, presenceHash);  // ~55% of positions have a lenticel
+
+    return dashMask * present * prominence;
+}
+
 // Bark albedo given height field h, Voronoi edge, object-space point, and Y pos.
 // RICHER COLOR: warm-brown ridges, dark grey-brown furrows, reddish midtone,
 // lichen concentrated in low-Y crevices, large-scale color blotch.
+// uBarkColor drives birch (0) → brown (1) palette interpolation.
+// uBarkPattern drives smooth+lenticels (0) → deep furrows (1) pattern.
 vec3 barkAlbedo(vec3 p_grain, float h, float voronoiEdge, float worldY) {
+    // ---- Palette interpolation (birch ↔ brown) driven by uBarkColor ----
+    vec3 paletteRidge      = mix(BIRCH_COLOR_RIDGE,       BARK_COLOR_RIDGE,       uBarkColor);
+    vec3 paletteFurrow     = mix(BIRCH_COLOR_FURROW,      BARK_COLOR_FURROW,      uBarkColor);
+    vec3 paletteInner      = mix(BIRCH_COLOR_INNER,       BARK_COLOR_INNER,       uBarkColor);
+    vec3 paletteLichen     = mix(BIRCH_COLOR_LICHEN,      BARK_COLOR_LICHEN,      uBarkColor);
+    vec3 paletteBlotchWarm = mix(BIRCH_COLOR_BLOTCH_WARM, BARK_COLOR_BLOTCH_WARM, uBarkColor);
+    vec3 paletteBlotchCool = mix(BIRCH_COLOR_BLOTCH_COOL, BARK_COLOR_BLOTCH_COOL, uBarkColor);
+
     // ---- Inner-bark midtone: only at intermediate heights (not ridges, not deepest grooves) ----
     // Peaks at h approx 0.35 (the 'shoulder' between ridge and deep furrow).
     float innerMask = clamp(1.0 - abs(h - 0.35) * 4.0, 0.0, 1.0);
@@ -219,13 +280,13 @@ vec3 barkAlbedo(vec3 p_grain, float h, float voronoiEdge, float worldY) {
 
     // ---- Base ridge/furrow interpolation ----
     // h->0: FURROW color, h->1: RIDGE color, midtone INNER bleeds in at ~0.35.
-    vec3 baseCol = mix(BARK_COLOR_FURROW, BARK_COLOR_RIDGE, h);
-    baseCol = mix(baseCol, BARK_COLOR_INNER, innerMask * 0.55);
+    vec3 baseCol = mix(paletteFurrow, paletteRidge, h);
+    baseCol = mix(baseCol, paletteInner, innerMask * 0.55);
 
-    // ---- Voronoi crack darkening ----
+    // ---- Voronoi crack darkening (scaled by uBarkPattern for smooth birch) ----
     // Crack edges (voronoiEdge near 0) pull color toward a darker version.
-    vec3 crackCol = BARK_COLOR_FURROW * 0.6;  // even darker in crack boundaries
-    float crackMask = BARK_CRACK_DEPTH * (1.0 - voronoiEdge) * (1.0 - h * 0.5);
+    vec3 crackCol = paletteFurrow * 0.6;  // even darker in crack boundaries
+    float crackMask = BARK_CRACK_DEPTH * uBarkPattern * (1.0 - voronoiEdge) * (1.0 - h * 0.5);
     baseCol = mix(baseCol, crackCol, crackMask);
 
     // ---- Lichen: in deep crevices AND biased toward base (lower worldY) ----
@@ -235,13 +296,21 @@ vec3 barkAlbedo(vec3 p_grain, float h, float voronoiEdge, float worldY) {
     float lichenBase    = clamp(1.0 - worldY * 0.55, 0.0, 1.0);
     float lichenSpatter = clamp(barkNoise(p_grain * 3.7 + vec3(7.3, 2.9, 5.1)) * 0.5 + 0.5, 0.0, 1.0);
     float lichenMask = lichenCrevice * lichenBase * lichenSpatter;
-    baseCol = mix(baseCol, BARK_COLOR_LICHEN, lichenMask * 0.70);
+    baseCol = mix(baseCol, paletteLichen, lichenMask * 0.70);
 
     // ---- Large-scale color blotch (low-freq noise) ----
-    // Prevents uniform brown -- drifts between warm and cool-brown regions.
+    // Prevents uniform color -- drifts between warm and cool regions.
     float blotch = barkNoise(p_grain * 0.18 + vec3(5.5, 1.3, 3.7)) * 0.5 + 0.5;
-    vec3 blotchCol = mix(BARK_COLOR_BLOTCH_COOL, BARK_COLOR_BLOTCH_WARM, blotch);
+    vec3 blotchCol = mix(paletteBlotchCool, paletteBlotchWarm, blotch);
     baseCol = mix(baseCol, blotchCol, 0.22);
+
+    // ---- Lenticel marks: prominent for birch (low barkPattern), fade for furrowed bark ----
+    // lenticel prominence peaks when barkPattern is low (smooth/birch regime).
+    float lenticelProminence = clamp((1.0 - uBarkPattern) * 1.4, 0.0, 1.0);
+    float lenticelMask = barkLenticel(p_grain, lenticelProminence);
+    // Lenticel color: dark grey-brown dash on the pale birch base.
+    vec3 lenticelCol = mix(paletteRidge, paletteFurrow * 0.55, 0.75);
+    baseCol = mix(baseCol, lenticelCol, lenticelMask);
 
     // ---- Micro-variation: +-0.04 from high-freq noise ----
     float micro = barkNoise(p_grain * 8.3 + vec3(1.1, 4.4, 2.2)) * 0.04;
@@ -366,6 +435,8 @@ varying vec3 vObjPos;
 varying float vAo;
 uniform float uWoodiness;
 uniform float uPigment;
+uniform float uBarkColor;
+uniform float uBarkPattern;
 `;
 
 // Replaces #include <map_fragment>.
@@ -387,6 +458,10 @@ vec3  barkPGrain       = vec3(vObjPos.x, vObjPos.y * 3.0, vObjPos.z);
 float barkFw = max(max(fwidth(barkPGrain.x), fwidth(barkPGrain.y)), fwidth(barkPGrain.z));
 
 float barkH = barkHeightField(barkPGrain, barkFeatureScale, barkFw);
+// Flatten relief toward smooth for birch regime (low uBarkPattern).
+// Ridge contrast is pulled toward a neutral mid-grey so normals stay gentle.
+// The lerp target (0.55) sits at the birch 'nearly flat' read without going fully flat.
+barkH = mix(0.55, barkH, mix(0.25, 1.0, uBarkPattern));
 
 float barkPlateFreq   = BARK_PLATE_FREQ / max(barkFeatureScale, 0.04);
 vec2  barkPlateUV     = vec2(vObjPos.x, vObjPos.y * 1.4) * barkPlateFreq;
@@ -415,9 +490,12 @@ roughnessFactor = clamp(roughnessFactor + barkNormalVariance, 0.0, 1.0);
 // Replaces #include <roughnessmap_fragment>.
 // Sets roughnessFactor (declared by three's roughness_fragment_begin preamble).
 // barkH is in scope from the map_fragment replacement above.
+// Birch bark (low uBarkPattern) is smoother, so roughness is lower overall.
 const FRAG_ROUGHNESS_REPLACEMENT = /* glsl */`
 float roughnessFactor = roughness;
-roughnessFactor = mix(0.92, 0.55, barkH);
+float barkRoughnessBase = mix(0.62, 0.92, uBarkPattern);
+float barkRoughnessRidge = mix(0.38, 0.55, uBarkPattern);
+roughnessFactor = mix(barkRoughnessBase, barkRoughnessRidge, barkH);
 // NOTE: Toksvig roughness compensation (fwidth of the perturbed normal) is applied
 // in FRAG_NORMAL_REPLACEMENT, not here — the normal variable does not exist yet here.
 `;
@@ -451,8 +529,10 @@ reflectedLight.indirectDiffuse *= mix(1.0, vAo, 0.85);
 export function createBarkMaterial() {
     // Stable uniform refs — mutated by setGenome() without triggering recompile.
     const barkUniforms = {
-        uWoodiness: { value: 0.88 },
-        uPigment:   { value: 0.45 },
+        uWoodiness:   { value: 0.88 },
+        uPigment:     { value: 0.45 },
+        uBarkColor:   { value: 1.00 },
+        uBarkPattern: { value: 1.00 },
     };
 
     const material = new THREE.MeshStandardMaterial({
@@ -462,9 +542,9 @@ export function createBarkMaterial() {
     });
 
     // Stable cache key so three.js never recompiles this variant unnecessarily.
-    // Bumped from 'bark-wind' → 'bark-windskin' for the hierarchical skin variant
-    // so stale cached programs (old global-field wind) are not reused.
-    material.customProgramCacheKey = () => 'bark-windskin';
+    // Bumped from 'bark-windskin' → 'bark-windskin-colorpattern' for the
+    // barkColor/barkPattern uniform additions so stale cached programs are not reused.
+    material.customProgramCacheKey = () => 'bark-windskin-colorpattern';
 
     material.onBeforeCompile = (shader) => {
         // Merge our genome uniforms into the shader's uniform map.
@@ -542,18 +622,22 @@ export function createBarkMaterial() {
         material,
 
         /**
-         * setGenome({ woodiness, pigment })
+         * setGenome({ woodiness, pigment, barkColor, barkPattern })
          *
          * Mutates genome uniform values in-place — no shader recompile triggered.
-         * Both parameters are optional; omitted ones keep their current value.
+         * All parameters are optional; omitted ones keep their current value.
          *
          * @param {object} opts
-         * @param {number} [opts.woodiness]
-         * @param {number} [opts.pigment]
+         * @param {number} [opts.woodiness]   reserved / future use
+         * @param {number} [opts.pigment]     per-species hue gene 0–1
+         * @param {number} [opts.barkColor]   0=birch/white, 1=dark brown; default 0.85
+         * @param {number} [opts.barkPattern] 0=smooth+lenticels, 1=deep furrowed; default 0.80
          */
-        setGenome({ woodiness, pigment } = {}) {
-            if (woodiness !== undefined) barkUniforms.uWoodiness.value = woodiness;
-            if (pigment   !== undefined) barkUniforms.uPigment.value   = pigment;
+        setGenome({ woodiness, pigment, barkColor, barkPattern } = {}) {
+            if (woodiness   !== undefined) barkUniforms.uWoodiness.value   = woodiness;
+            if (pigment     !== undefined) barkUniforms.uPigment.value     = pigment;
+            if (barkColor   !== undefined) barkUniforms.uBarkColor.value   = barkColor;
+            if (barkPattern !== undefined) barkUniforms.uBarkPattern.value = barkPattern;
         },
 
         /**

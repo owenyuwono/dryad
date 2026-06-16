@@ -851,5 +851,98 @@ export function solveProportions(graph, envelope, genome = null) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // WEEP PASS — willow-style cascade droop (genome.weep ∈ [0,1], default 0)
+  //
+  // Applies a progressive downward bend that accumulates toward the tips,
+  // producing the pendulous hanging-strand look of weeping willows.
+  //
+  // Design:
+  //   • Guarded on weep > 0. At weep == 0, the entire block is skipped and
+  //     output is byte-identical to a tree with no weep gene (no-op guarantee).
+  //   • Pure geometry — no rng draws. Deterministic given same inputs.
+  //   • Does NOT touch isRoot nodes.
+  //   • Applied as a SECOND rotation pass, on top of the existing woody droop
+  //     and terminal bending already computed above. This means the weep angle
+  //     adds to the existing droop rather than replacing it.
+  //
+  // Angle formula per node:
+  //   weepAngle = weep * WEEP_MAX_PER_LEVEL * branchLevel
+  //
+  //   WEEP_MAX_PER_LEVEL = 0.35 rad/level — calibrated so weep=1, branchLevel=4
+  //   gives 1.4 rad (~80°) of additional arc, enough for long willowing strands
+  //   while branchLevel=0 (trunk) contributes 0 (the trunk stays upright).
+  //
+  //   The angle is clamped to [0, π] so no node can rotate past straight-down.
+  //
+  // Rotation:
+  //   For each non-root node with branchLevel > 0, compute the offset from its
+  //   parent's (already-adjusted) position, then rotate that offset toward the
+  //   downward direction by weepAngle using Rodrigues' formula.
+  //   The parent's position is used in-order (parents precede children by the
+  //   parentIdx < ownIndex invariant), so the bend accumulates along each chain:
+  //   each segment is bent relative to the position its parent already settled at,
+  //   producing a curve rather than a uniform translation.
+  //
+  // Terminal-specific extra:
+  //   Terminal nodes use attachPos as their parent anchor (matching the existing
+  //   bending pass). We bend the offset from attachPos by the weep angle, then
+  //   reconstruct pos = attachPos + bentOffset.
+  // -------------------------------------------------------------------------
+  const weep = (genome !== null && genome.weep !== undefined) ? (genome.weep ?? 0) : 0;
+
+  if (weep > 0) {
+    const WEEP_MAX_PER_LEVEL = 0.35; // radians of weep arc per branchLevel at weep=1
+
+    // Forward pass: parentIdx < ownIndex guarantees parents are already adjusted
+    // before we process each child.
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+
+      // Skip root nodes — they are underground, unaffected by willow weep.
+      if (n.isRoot === true) continue;
+
+      // Skip trunk nodes (branchLevel=0) — the trunk should stay upright.
+      const level = n.branchLevel !== undefined ? n.branchLevel : 0;
+      if (level === 0) continue;
+
+      // Per-node weep angle, clamped to [0, π].
+      const weepAngle = Math.min(Math.PI, weep * WEEP_MAX_PER_LEVEL * level);
+      if (weepAngle < 1e-12) continue;
+
+      // Anchor to the parent's ALREADY-WEEPED position for EVERY node, INCLUDING
+      // terminals. Terminals must cascade with their drooping parent. Anchoring
+      // them to the static attachPos (as the earlier terminal-bending pass does)
+      // left a near-zero offset → they were skipped below, so the visible
+      // leaf-bearing tips stayed up while only interior nodes drooped and the
+      // willow cascade never appeared. Using parent.pos gives a real segment
+      // offset that rotates down and follows the parent's accumulated droop.
+      const parentIdx = n.parentIdx !== undefined ? n.parentIdx : -1;
+      if (parentIdx < 0) continue;
+      const anchorPos = nodes[parentIdx].pos;
+
+      const rawOffset = [
+        n.pos[0] - anchorPos[0],
+        n.pos[1] - anchorPos[1],
+        n.pos[2] - anchorPos[2],
+      ];
+      const offsetLen = vecLen(rawOffset);
+      if (offsetLen < 1e-10) continue;
+
+      // Rotation axis: cross(rawOffset, downDir) rotates offset TOWARD downDir.
+      // (Same convention as the woody droop axis above.)
+      let kWeep = vecCross(rawOffset, downDir);
+      const kWeepLen = vecLen(kWeep);
+      if (kWeepLen < 1e-10) continue; // already parallel to downDir, skip
+
+      kWeep = vecScale(kWeep, 1 / kWeepLen);
+      const bentOffset = rotateAroundAxis(rawOffset, kWeep, weepAngle);
+
+      n.pos[0] = anchorPos[0] + bentOffset[0];
+      n.pos[1] = anchorPos[1] + bentOffset[1];
+      n.pos[2] = anchorPos[2] + bentOffset[2];
+    }
+  }
+
   return graph;
 }

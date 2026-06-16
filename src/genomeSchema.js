@@ -176,6 +176,16 @@ export const FLORA_SCHEMA = Object.freeze({
     range: Object.freeze([-0.2, 0.4]),
   }),
 
+  /**
+   * Weeping droop intensity applied in proportions.js; 0 = no-op, 1 = max pendulous.
+   * Consumed by solveProportions — NOT returned by resolve(). Draw 38.
+   */
+  weep: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
   // -------------------------------------------------------------------------
   // COSMETIC TIER — surface detail
   // -------------------------------------------------------------------------
@@ -253,6 +263,26 @@ export const FLORA_SCHEMA = Object.freeze({
    * Non-integer m morphs lobe count continuously. Cosmetic only — texture only. Draw 35.
    */
   leafLobing: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Bark base colour: 0 = white/cream (birch lenticels) → 1 = dark brown.
+   * Cosmetic only — barkMaterial consumer. Draw 36.
+   */
+  barkColor: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Bark surface pattern: 0 = smooth + lenticels → 1 = deeply furrowed.
+   * Cosmetic only — barkMaterial consumer. Draw 37.
+   */
+  barkPattern: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),

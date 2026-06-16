@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { solveProportions } from '../src/proportions.js';
+import { buildSkeleton } from '../src/skeleton.js';
+import { mulberry32 } from '../src/rng.js';
+import { TREE_DEFAULT } from '../src/presets.js';
 
 // ---------------------------------------------------------------------------
 // Graph factories
@@ -1205,4 +1208,246 @@ test('root pipe-model: bit-for-bit determinism with root nodes across two calls'
     r2.nodes.map(n => ({ radius: n.radius, pos: n.pos })),
     'Root node radii and positions must be bit-for-bit identical on repeat calls'
   );
+});
+
+// ---------------------------------------------------------------------------
+// WEEP GENE TESTS
+// ---------------------------------------------------------------------------
+
+/**
+ * Graph for weep testing: one trunk chain + two branch levels + terminal.
+ *
+ *   node 0: trunk base (branchLevel=0, no parent) — stays vertical
+ *   node 1: level-1 woody branch, horizontal offset from node 0
+ *   node 2: level-2 woody branch, offset from node 1 (deeper, should droop more)
+ *   node 3: terminal leaf at level-3, attachPos at node 2's position
+ *
+ * Using horizontal offsets so the downward rotation has maximum observable effect.
+ */
+function makeWeepGraph() {
+  return {
+    nodes: [
+      // node 0: trunk base (branchLevel=0, stays put under weep)
+      { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 1, 0], parentIdx: -1 },
+      // node 1: level-1 branch, horizontal offset from trunk
+      { isWoody: true, branchLevel: 1, pos: [1, 1, 0], parentIdx: 0 },
+      // node 2: level-2 branch, further out (has child → not tip-tapered)
+      { isWoody: true, branchLevel: 2, pos: [2, 1, 0], parentIdx: 1 },
+      // node 3: terminal at level-3, attachPos at node 2's start pos
+      { isTerminal: true, branchLevel: 3, pos: [3, 1, 0], attachPos: [2, 1, 0], parentIdx: 2 },
+    ],
+    bones: [
+      { a: 0, b: 1 },
+      { a: 1, b: 2 },
+      { a: 2, b: 3 },
+    ],
+    meta: { bodyAxis: [0, 1, 0] },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 34. WEEP NO-OP — weep=0 output is byte-identical to genome with weep absent
+// ---------------------------------------------------------------------------
+
+test('weep=0: output is byte-identical to genome without weep gene (no-op guarantee)', () => {
+  // Graph with weep=0 explicitly
+  const gWeep0 = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, {
+    rigidity: 0.5, verticality: 0.5, weep: 0,
+  });
+  // Graph with weep absent from genome entirely
+  const gNoWeep = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, {
+    rigidity: 0.5, verticality: 0.5,
+  });
+
+  assert.deepStrictEqual(
+    gWeep0.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    gNoWeep.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    'weep=0 must produce bit-for-bit identical output to genome with no weep field'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 35. WEEP NO-OP — weep=0 with full genome matches no-genome baseline
+// ---------------------------------------------------------------------------
+
+test('weep=0: all-genes genome with weep=0 matches genome=null output', () => {
+  // genome=null => all defaults => no weep. This confirms the no-op at 0.
+  const gNull = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, null);
+  const gWeep0 = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, {
+    weep: 0,
+  });
+
+  assert.deepStrictEqual(
+    gNull.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    gWeep0.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    'weep=0 must match genome=null baseline'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 36. WEEP EFFECT — weep>0 lowers distal/terminal nodes (Y decreases)
+// ---------------------------------------------------------------------------
+
+test('weep>0: distal and terminal nodes are lower than at weep=0', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+
+  const gBase = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genome, weep: 0 });
+  const gWeep = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genome, weep: 0.7 });
+
+  // Level-1 node (node 1) should droop down
+  assert.ok(
+    gWeep.nodes[1].pos[1] < gBase.nodes[1].pos[1],
+    `weep=0.7: level-1 node Y (${gWeep.nodes[1].pos[1]}) should be lower than weep=0 (${gBase.nodes[1].pos[1]})`
+  );
+
+  // Level-2 node (node 2) should droop even more (deeper = more weep)
+  assert.ok(
+    gWeep.nodes[2].pos[1] < gBase.nodes[2].pos[1],
+    `weep=0.7: level-2 node Y (${gWeep.nodes[2].pos[1]}) should be lower than weep=0 (${gBase.nodes[2].pos[1]})`
+  );
+
+  // Terminal node (node 3) should droop most of all
+  assert.ok(
+    gWeep.nodes[3].pos[1] < gBase.nodes[3].pos[1],
+    `weep=0.7: terminal node Y (${gWeep.nodes[3].pos[1]}) should be lower than weep=0 (${gBase.nodes[3].pos[1]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 37. WEEP MONOTONIC — droop at distal nodes increases monotonically with weep
+// ---------------------------------------------------------------------------
+
+test('weep: tip/distal droop increases monotonically as weep gene increases', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+  const weepSteps = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+
+  // Track level-2 node Y (a distal woody node) across weep values.
+  const nodeYs = weepSteps.map(w => {
+    const g = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genome, weep: w });
+    return g.nodes[2].pos[1];  // level-2 woody node — should descend monotonically
+  });
+
+  for (let i = 1; i < nodeYs.length; i++) {
+    assert.ok(
+      nodeYs[i] <= nodeYs[i - 1] + 1e-10,
+      `weep monotonicity violated: node[2].Y at weep=${weepSteps[i]}=${nodeYs[i]} > weep=${weepSteps[i-1]}=${nodeYs[i-1]}`
+    );
+  }
+
+  // weep=1 should produce substantially more droop than weep=0.
+  assert.ok(
+    nodeYs[weepSteps.length - 1] < nodeYs[0],
+    `weep=1 node[2].Y (${nodeYs[nodeYs.length-1]}) should be lower than weep=0 (${nodeYs[0]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 38. WEEP TRUNK INVARIANT — trunk base (branchLevel=0) is NOT moved by weep
+// ---------------------------------------------------------------------------
+
+test('weep: trunk base node (branchLevel=0) is unaffected by any weep value', () => {
+  // The trunk node pos[0] must equal the weep=0 baseline exactly.
+  const genomBase = { rigidity: 0.5, verticality: 0.5 };
+  const gBase = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genomBase, weep: 0 });
+  const trunkPosBase = [...gBase.nodes[0].pos];
+
+  for (const w of [0.1, 0.3, 0.5, 0.7, 1.0]) {
+    const g = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genomBase, weep: w });
+    assert.deepStrictEqual(
+      g.nodes[0].pos,
+      trunkPosBase,
+      `weep=${w}: trunk base position must be unchanged (got ${g.nodes[0].pos}, expected ${trunkPosBase})`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 39. WEEP DISTAL ACCUMULATION — deeper branches droop more than shallower ones
+// ---------------------------------------------------------------------------
+
+test('weep: deeper branch levels droop more than shallower ones (cascade accumulation)', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5, weep: 0.7 };
+  const gBase  = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, { ...genome, weep: 0 });
+  const gWeep  = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, genome);
+
+  // Droop delta = how far each node dropped relative to its weep=0 position.
+  const dropLevel1 = gBase.nodes[1].pos[1] - gWeep.nodes[1].pos[1];  // level 1
+  const dropLevel2 = gBase.nodes[2].pos[1] - gWeep.nodes[2].pos[1];  // level 2
+  const dropLevel3 = gBase.nodes[3].pos[1] - gWeep.nodes[3].pos[1];  // level 3 (terminal)
+
+  assert.ok(
+    dropLevel2 > dropLevel1 - 1e-9,
+    `weep accumulation: level-2 droop (${dropLevel2.toFixed(4)}) should be >= level-1 droop (${dropLevel1.toFixed(4)})`
+  );
+  assert.ok(
+    dropLevel3 > dropLevel2 - 1e-9,
+    `weep accumulation: level-3 (terminal) droop (${dropLevel3.toFixed(4)}) should be >= level-2 droop (${dropLevel2.toFixed(4)})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 40. WEEP DETERMINISM — same genome produces identical output on repeat calls
+// ---------------------------------------------------------------------------
+
+test('weep: deterministic — same genome+envelope produces bit-for-bit identical output', () => {
+  const genome = { rigidity: 0.4, verticality: 0.5, weep: 0.6 };
+
+  const r1 = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, genome);
+  const r2 = solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, genome);
+
+  assert.deepStrictEqual(
+    r1.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    r2.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    'weep gene must produce bit-for-bit identical output on repeat calls'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 41. WEEP ZERO-RNG — no Math.random calls during the weep pass
+// ---------------------------------------------------------------------------
+
+test('weep: zero-rng — Math.random is not called during weep pass', () => {
+  let called = false;
+  const orig = Math.random;
+  Math.random = () => { called = true; return orig(); };
+  try {
+    solveProportions(cloneGraph(makeWeepGraph()), baseEnvelope, {
+      rigidity: 0.5, verticality: 0.5, weep: 1.0,
+    });
+    assert.strictEqual(called, false, 'Math.random must not be called even at weep=1.0');
+  } finally {
+    Math.random = orig;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 42. WEEP REAL-SKELETON — terminal tips actually droop on a real tree.
+//
+// REGRESSION: the synthetic weep fixtures give the terminal a 0.3-unit offset
+// from its attachPos, so weep moved it. But REAL terminals have attachPos ≈ pos
+// (near-zero offset), and the original weep pass anchored terminals to attachPos
+// → their offset was below the skip threshold → the visible leaf-bearing tips
+// never drooped (only interior nodes did). This builds a REAL skeleton and
+// asserts the canopy tips cascade, which the synthetic fixtures could not catch.
+// ---------------------------------------------------------------------------
+
+test('weep (real skeleton): terminal tips droop substantially as weep increases', () => {
+  const env = {
+    gravity: 1, medium: 'air', light: 1, sunAngle: 45, wind: 0.3,
+    aridity: 0.3, temperature: 0.5, energy: 'photo', biochem: 'carbon',
+  };
+  function meanTipY(weep) {
+    const g = { ...TREE_DEFAULT, weep };
+    const graph = buildSkeleton(g, mulberry32(g.structuralSeed), g.jitter);
+    solveProportions(graph, env, g);
+    const tips = graph.nodes.filter(n => !n.isRoot && n.isTerminal === true);
+    return tips.reduce((a, n) => a + n.pos[1], 0) / tips.length;
+  }
+  const y0 = meanTipY(0.0);
+  const y5 = meanTipY(0.5);
+  const y9 = meanTipY(0.9);
+  assert.ok(y5 < y0, `weep 0.5 mean tip Y (${y5.toFixed(3)}) must be below weep 0 (${y0.toFixed(3)})`);
+  assert.ok(y9 < y5, `weep 0.9 mean tip Y (${y9.toFixed(3)}) must be below weep 0.5 (${y5.toFixed(3)})`);
+  // And the effect must be substantial, not a rounding wiggle (the bug was ~0 change).
+  assert.ok(y0 - y9 > 1.0, `weep 0.9 should drop tips well over 1 world-unit (got ${(y0 - y9).toFixed(3)})`);
 });

@@ -87,11 +87,13 @@ const EXPECTED_STRUCTURAL = [
 const EXPECTED_PROPORTIONS = [
   'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
   'ribbing', 'spininess', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
+  'weep',
 ];
 
 const EXPECTED_COSMETIC = [
   'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
   'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
+  'barkColor', 'barkPattern',
   'structuralSeed',
 ];
 
@@ -129,6 +131,9 @@ const EXPECTED_RANGES = {
   leafTip:          [0.0, 1.0],
   leafSerration:    [0.0, 1.0],
   leafLobing:       [0.0, 1.0],
+  barkColor:        [0.0, 1.0],
+  barkPattern:      [0.0, 1.0],
+  weep:             [0.0, 1.0],
   // Root system genes (added Task 1)
   rootCount:        [0, 1],
   rootDepth:        [0, 1],
@@ -291,6 +296,7 @@ describe('clampField — per-gene clamping', () => {
     'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
     'ribbing', 'spininess', 'apicalBias', 'pigment', 'leafWidth',
     'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
+    'barkColor', 'barkPattern', 'weep',
   ];
 
   for (const field of UNIT_GENES) {

@@ -52,6 +52,10 @@
 //     Draw 33: leafTip
 //     Draw 34: leafSerration
 //     Draw 35: leafLobing
+//   Bark + weep genes (appended AFTER draw 35 — no skeleton/foliage shift):
+//     Draw 36: barkColor    (cosmetic — returned by resolve)
+//     Draw 37: barkPattern  (cosmetic — returned by resolve)
+//     Draw 38: weep         (proportions — NOT returned by resolve; consumed in proportions.js)
 //
 // NEUTRAL DEFAULTS (geneNeutral) — the sensible middling plant:
 //   branchiness:      0.50   (moderate branching)
@@ -81,6 +85,9 @@
 //   leafTip:          0.40   (slightly pointed; maps to n1≈1.24)
 //   leafSerration:    0.00   (smooth margin by default)
 //   leafLobing:       0.00   (simple ovate, m=2, no lobes)
+//   barkColor:        0.85   (mid-brown bark; 0=white/cream birch, 1=dark brown)
+//   barkPattern:      0.80   (mostly furrowed; 0=smooth+lenticels, 1=deeply furrowed)
+//   weep:             0.00   (no weep droop — no-op at neutral)
 //   structuralSeed:   derived from seed draw, not a neutral offset
 //
 // ENV→GENE BIAS TABLE (envOffset — default-centered):
@@ -177,6 +184,13 @@ const NEUTRAL = Object.freeze({
   leafTip:          0.40,
   leafSerration:    0.00,
   leafLobing:       0.00,
+  // Bark + weep (draws 36–38)
+  // barkColor/barkPattern = 1.0 is the brown-furrowed IDENTITY (matches the
+  // pre-gene bark exactly). Lower values lighten toward birch white / smooth +
+  // lenticels — only the birch preset drives them down.
+  barkColor:        1.00,
+  barkPattern:      1.00,
+  weep:             0.00,
   // Root system (draws 24–30)
   rootCount:        0.45,
   rootDepth:        0.45,
@@ -252,6 +266,10 @@ function computeEnvOffset(env) {
     rootButtress:     0,
     rootBranchiness:  0,
     rootTaper:        0,
+    // Bark + weep offsets (0 at neutral env)
+    barkColor:        0,
+    barkPattern:      0,
+    weep:             medium === 'water' ? 0.05 : 0,
   };
 
   // --- aridity + temperature → dry/hot = cactus region ---
@@ -405,6 +423,12 @@ export function randomGenome(env, seed) {
   const leafSerration = gene('leafSerration', STD);       // draw 34
   const leafLobing    = gene('leafLobing',    STD);       // draw 35
 
+  // --- Bark + weep genes (draws 36–38) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 35 (leafLobing). Draws 01–35 are untouched.
+  const barkColor   = gene('barkColor',   STD);           // draw 36
+  const barkPattern = gene('barkPattern', STD);           // draw 37
+  const weep        = gene('weep',        STD);           // draw 38
+
   return {
     // Structural
     branchiness,
@@ -436,6 +460,9 @@ export function randomGenome(env, seed) {
     leafTip,
     leafSerration,
     leafLobing,
+    barkColor,
+    barkPattern,
+    weep,
     structuralSeed,
     // Root system
     rootCount,
@@ -512,6 +539,8 @@ export function resolve(genome, env) {
     leafTip:       genome.leafTip,
     leafSerration: genome.leafSerration,
     leafLobing:    genome.leafLobing,
+    barkColor:     genome.barkColor,
+    barkPattern:   genome.barkPattern,
     lightFlux:   env.light,
     foliage,
     woodiness:   Math.max(0, Math.min(1, 1 - genome.succulence)),

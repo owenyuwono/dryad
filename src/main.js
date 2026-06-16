@@ -22,9 +22,11 @@ const MORPH_GENES = [
   'appendageBreadth', 'appendageDensity',
   // Posture
   'verticality', 'rigidity', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
+  'weep',
   // Cosmetic
   'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
   'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
+  'barkColor', 'barkPattern',
   // Roots
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -59,6 +61,9 @@ const GENE_SLIDER_ID = {
   leafTip:          'leafTipSlider',
   leafSerration:    'leafSerrationSlider',
   leafLobing:       'leafLobingSlider',
+  weep:             'weepSlider',
+  barkColor:        'barkColorSlider',
+  barkPattern:      'barkPatternSlider',
   // Roots
   rootCount:        'rootCountSlider',
   rootDepth:        'rootDepthSlider',
