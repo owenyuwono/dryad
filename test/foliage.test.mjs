@@ -1079,15 +1079,26 @@ test('boneIndex is deterministic when nodeToBone is provided', () => {
 // TEST: colorRamp — pigmentToColor anchor values.
 // ---------------------------------------------------------------------------
 
-import { RAMP_ANCHORS, pigmentToColor } from '../src/colorRamp.js';
+import { pigmentToColor } from '../src/colorRamp.js';
 
-test('pigmentToColor returns exact anchor values at anchor t positions', () => {
-  for (const [t, r255, g255, b255] of RAMP_ANCHORS) {
-    const [r, g, b] = pigmentToColor(t);
-    assert.ok(Math.abs(r - r255 / 255) < 1e-5, `anchor t=${t} r mismatch`);
-    assert.ok(Math.abs(g - g255 / 255) < 1e-5, `anchor t=${t} g mismatch`);
-    assert.ok(Math.abs(b - b255 / 255) < 1e-5, `anchor t=${t} b mismatch`);
+test('pigmentToColor is deterministic — same pigment always returns same [r,g,b]', () => {
+  for (const p of [0, 0.1, 0.33, 0.5, 0.67, 0.9, 1.0]) {
+    const [r1, g1, b1] = pigmentToColor(p);
+    const [r2, g2, b2] = pigmentToColor(p);
+    assert.strictEqual(r1, r2, `r not deterministic at p=${p}`);
+    assert.strictEqual(g1, g2, `g not deterministic at p=${p}`);
+    assert.strictEqual(b1, b2, `b not deterministic at p=${p}`);
   }
+});
+
+test('pigmentToColor full-hue sweep — distinct pigment values produce distinct colors', () => {
+  // pigment=0 and pigment=1 are hue 0°/360° (same — HSL wraparound). Test 0..0.9.
+  const results = [];
+  for (let i = 0; i < 10; i++) {
+    results.push(JSON.stringify(pigmentToColor(i / 10)));
+  }
+  const unique = new Set(results);
+  assert.ok(unique.size === results.length, `expected ${results.length} distinct colors, got ${unique.size}`);
 });
 
 test('pigmentToColor clamps inputs outside [0,1]', () => {

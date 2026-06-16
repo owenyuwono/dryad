@@ -209,6 +209,16 @@ export const FLORA_SCHEMA = Object.freeze({
   }),
 
   /**
+   * Leaf lateral width multiplier; 0 = narrow blade, 0.5 = default (no change),
+   * 1 = broad leaf. Affects the leaf cluster texture only (cosmetic, no skeleton impact).
+   */
+  leafWidth: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
    * Per-plant uint32 seed that drives fine-grained jitter / procedural detail.
    * Always re-derived in every child (see mutate.js draw schedule).
    */

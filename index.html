@@ -93,6 +93,15 @@
     border-color: rgba(100, 180, 255, 0.6);
     color: #adf;
   }
+  /* Reroll-seed icon button: compact, square-ish; inherits the seed-row button
+     base style above (color/border/hover). SVG uses currentColor. */
+  #rerollSeedBtn {
+    padding: 4px 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
 
   /* Tab bar */
   #ui-tabs {
@@ -377,6 +386,12 @@
     <h1>Procedural Flora</h1>
     <div id="ui-seed-row">
       <input type="text" id="seedInput" value="42" />
+      <button id="rerollSeedBtn" title="New individual — reroll seed only (keeps all genes &amp; climate)" aria-label="Reroll seed">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M13.7 8a5.7 5.7 0 1 1-1.67-4.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M13.5 2.3V5.2H10.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button id="generateBtn">Generate</button>
     </div>
   </div>
@@ -540,6 +555,10 @@
       <label><span class="lname">Jitter</span><span class="val" id="jitterVal">1.00</span></label>
       <input type="range" id="jitterSlider" min="0" max="1.5" step="0.01" value="1.0"
              data-gene="jitter" data-display="jitterVal">
+
+      <label><span class="lname">Leaf width</span><span class="val" id="leafWidthVal">0.50</span></label>
+      <input type="range" id="leafWidthSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="leafWidth" data-display="leafWidthVal">
 
       <div class="hint">drag to orbit &nbsp;·&nbsp; wheel to zoom<br>shift-drag / right-drag to pan</div>
     </div>

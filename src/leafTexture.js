@@ -304,14 +304,15 @@ function toI(v) {
   return Math.round(Math.max(0, Math.min(1, v)) * 255);
 }
 
-function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, venation) {
+function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, venation, widthMul = 1.0) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
 
-  // Scale: x → point.x * leafH * 0.5, y → -point.y * leafH (tip up)
+  // Scale: x → point.x * leafH * 0.5 * widthMul, y → -point.y * leafH (tip up)
+  // widthMul: derived from leafWidth gene; 1.0 = unchanged, <1.0 = narrow, >1.0 = broad.
   const scaled = outline.map(p => ({
-    x: p.x * leafH * 0.5,
+    x: p.x * leafH * 0.5 * widthMul,
     y: -p.y * leafH,
   }));
 
@@ -337,9 +338,9 @@ function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, vena
   for (const edge of venation.edges) {
     const fromNode = venation.nodes[edge.from];
     const toNode = venation.nodes[edge.to];
-    const fx = fromNode.x * leafH * 0.5;
+    const fx = fromNode.x * leafH * 0.5 * widthMul;
     const fy = -fromNode.y * leafH;
-    const tx = toNode.x * leafH * 0.5;
+    const tx = toNode.x * leafH * 0.5 * widthMul;
     const ty = -toNode.y * leafH;
     ctx.lineWidth = Math.max(0.4, leafH * 0.012 * Math.pow(0.6, toNode.depth * 0.25));
     ctx.beginPath();
@@ -369,7 +370,7 @@ function lightenColor(cssColor, amount) {
 // Public API — cluster texture.
 // ---------------------------------------------------------------------------
 
-export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resolution = 'high' }) {
+export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resolution = 'high', leafWidth = 0.5 }) {
   if (typeof document === 'undefined') {
     return null;
   }
@@ -383,6 +384,9 @@ export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resol
 
   const [baseR, baseG, baseB] = pigmentToColor(pigment);
   const [baseH, baseS, baseL] = rgbToHsl(baseR, baseG, baseB);
+
+  // leafWidth 0..1 → widthMul 0.5..1.5; at leafWidth=0.5 → widthMul=1.0 (no change).
+  const widthMul = 0.5 + leafWidth;
 
   const count = clusterLeafCount(seed);
   const leaves = clusterLeafParams(seed, count);
@@ -419,7 +423,7 @@ export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resol
     const by = attachY - leaf.oy * SIZE;
     const scaledLeafH = leafH * leaf.scale;
 
-    drawLeaf(ctx, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation);
+    drawLeaf(ctx, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation, widthMul);
   }
 
   return { source: canvas, width: SIZE, height: SIZE };

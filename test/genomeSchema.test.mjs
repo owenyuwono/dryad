@@ -90,7 +90,7 @@ const EXPECTED_PROPORTIONS = [
 ];
 
 const EXPECTED_COSMETIC = [
-  'pigment', 'leafSize', 'leafDensity', 'jitter', 'structuralSeed',
+  'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth', 'structuralSeed',
 ];
 
 const REMOVED_GENES = [
@@ -122,6 +122,7 @@ const EXPECTED_RANGES = {
   leafSize:         [0.6, 1.6],
   leafDensity:      [0.5, 1.5],
   jitter:           [0.0, 1.5],
+  leafWidth:        [0.0, 1.0],
   // Root system genes (added Task 1)
   rootCount:        [0, 1],
   rootDepth:        [0, 1],
@@ -282,7 +283,7 @@ describe('clampField — per-gene clamping', () => {
     'branchiness', 'branchFactorN', 'tillering', 'radialOrder',
     'appendageBreadth', 'appendageDensity', 'segmentation',
     'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
-    'ribbing', 'spininess', 'apicalBias', 'pigment',
+    'ribbing', 'spininess', 'apicalBias', 'pigment', 'leafWidth',
   ];
 
   for (const field of UNIT_GENES) {

@@ -22,7 +22,7 @@ const MORPH_GENES = [
   // Posture
   'verticality', 'rigidity', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
   // Cosmetic
-  'pigment', 'leafSize', 'leafDensity', 'jitter',
+  'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
   // Roots
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -52,6 +52,7 @@ const GENE_SLIDER_ID = {
   leafSize:         'leafSizeSlider',
   leafDensity:      'leafDensitySlider',
   jitter:           'jitterSlider',
+  leafWidth:        'leafWidthSlider',
   // Roots
   rootCount:        'rootCountSlider',
   rootDepth:        'rootDepthSlider',
@@ -281,6 +282,18 @@ document.getElementById('generateBtn').addEventListener('click', () => {
   generate();
 });
 
+document.getElementById('rerollSeedBtn').addEventListener('click', () => {
+  // Reroll ONLY the structural seed → a new INDIVIDUAL of the same specimen:
+  // the skeleton + root topology change, but every gene (and the climate) stays
+  // exactly as-is. (Generate, by contrast, rolls a whole new climate-adapted
+  // genome.) Re-resolve the current genome with its new structuralSeed.
+  if (!genome) return;
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  genome.structuralSeed = arr[0] >>> 0;
+  renderCurrent();
+});
+
 // =============================================================================
 // INITIAL GENERATION — load a fixed tree default so the page always opens on
 // a proper deciduous tree (low succulence → bark trunk, lush canopy).
@@ -323,10 +336,11 @@ const TREE_DEFAULT = {
   lengthRatio:      0.70,  // faster taper → compact proportionate crown, not whippy
   apicalBias:       0.75,  // strong apical dominance keeps clear trunk leader
   droopBias:        0.10,
-  pigment:          0.42,
+  pigment:          0.33,  // hue≈120° on the full-hue wheel → leaf green
   leafSize:         1.00,
   leafDensity:      1.10,
   jitter:           1.00,
+  leafWidth:        0.50,  // 0.5 = no width change (widthMul=1.0)
   structuralSeed:   1337,
   // Root system defaults for the tree specimen
   rootCount:        0.50,  // ~4 major laterals — good oak/beech spread

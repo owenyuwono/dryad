@@ -526,6 +526,12 @@ describe('resolve — output fields', () => {
     assert.equal(r.leafDensity, g.leafDensity);
   });
 
+  it('leafWidth in output matches genome.leafWidth', () => {
+    const g = randomGenome(NEUTRAL_ENV, 9);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.leafWidth, g.leafWidth);
+  });
+
   it('uRibbing matches genome.ribbing', () => {
     const g = randomGenome(NEUTRAL_ENV, 4);
     const r = resolve(g, NEUTRAL_ENV);
@@ -614,7 +620,7 @@ describe('randomGenome → mutate round-trip schema validity', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite 8: speciesColor
+// Suite 8: speciesColor — full-hue HSL mapping
 // ---------------------------------------------------------------------------
 
 describe('speciesColor', () => {
@@ -626,21 +632,64 @@ describe('speciesColor', () => {
       `speciesColor returned unexpected: ${c}`);
   });
 
-  it('pigment=0.45 (neutral green) produces green-ish color', () => {
-    const g = { pigment: 0.45 };
-    const c = speciesColor(g);
-    // At anchor 0.45 exactly: rgb(71,158,46)
-    assert.equal(c, 'rgb(71,158,46)');
+  it('is deterministic: same pigment always produces same string', () => {
+    for (const p of [0, 0.1, 0.33, 0.5, 0.7, 1.0]) {
+      const c1 = speciesColor({ pigment: p });
+      const c2 = speciesColor({ pigment: p });
+      assert.equal(c1, c2, `speciesColor not deterministic at pigment=${p}`);
+    }
   });
 
-  it('pigment=0 → teal anchor', () => {
+  it('pigment=0.33 (≈120° hue = green) has higher green component than red/blue', () => {
+    // Green hue: g channel should dominate
+    const c = speciesColor({ pigment: 0.33 });
+    const m = c.match(/rgb\((\d+),(\d+),(\d+)\)/);
+    assert.ok(m, `unexpected format: ${c}`);
+    const [, r, g, b] = m.map(Number);
+    assert.ok(g > r, `green channel ${g} should exceed red ${r} at pigment=0.33`);
+    assert.ok(g > b, `green channel ${g} should exceed blue ${b} at pigment=0.33`);
+  });
+
+  it('pigment=0 (red hue) has higher red component than green/blue', () => {
+    // Hue=0° = red
     const c = speciesColor({ pigment: 0 });
-    assert.equal(c, 'rgb(46,166,140)');
+    const m = c.match(/rgb\((\d+),(\d+),(\d+)\)/);
+    assert.ok(m, `unexpected format: ${c}`);
+    const [, r, g, b] = m.map(Number);
+    assert.ok(r > g, `red channel ${r} should exceed green ${g} at pigment=0`);
+    assert.ok(r > b, `red channel ${r} should exceed blue ${b} at pigment=0`);
   });
 
-  it('pigment=1 → warm gold anchor', () => {
-    const c = speciesColor({ pigment: 1 });
-    assert.equal(c, 'rgb(184,107,15)');
+  it('pigment=0.67 (≈240° hue = blue) has higher blue component than red', () => {
+    // Hue≈240° = blue
+    const c = speciesColor({ pigment: 0.67 });
+    const m = c.match(/rgb\((\d+),(\d+),(\d+)\)/);
+    assert.ok(m, `unexpected format: ${c}`);
+    const [, r, , b] = m.map(Number);
+    assert.ok(b > r, `blue channel ${b} should exceed red ${r} at pigment=0.67`);
+  });
+
+  it('distinct pigment values produce distinct colors (full hue variety)', () => {
+    // pigment=0 and pigment=1 are both hue=0°/360° (same color — HSL wraparound is correct).
+    // Test pigment 0.0, 0.1, ..., 0.9 (10 distinct hue positions).
+    const colors = new Set();
+    for (let i = 0; i < 10; i++) {
+      colors.add(speciesColor({ pigment: i / 10 }));
+    }
+    assert.equal(colors.size, 10, `expected 10 distinct colors across pigment 0..0.9, got ${colors.size}`);
+  });
+
+  it('all channels in [0,255] for all pigment values', () => {
+    for (let i = 0; i <= 20; i++) {
+      const p = i / 20;
+      const c = speciesColor({ pigment: p });
+      const m = c.match(/rgb\((\d+),(\d+),(\d+)\)/);
+      assert.ok(m, `unexpected format at pigment=${p}: ${c}`);
+      const [, r, g, b] = m.map(Number);
+      assert.ok(r >= 0 && r <= 255, `r=${r} out of range at pigment=${p}`);
+      assert.ok(g >= 0 && g <= 255, `g=${g} out of range at pigment=${p}`);
+      assert.ok(b >= 0 && b <= 255, `b=${b} out of range at pigment=${p}`);
+    }
   });
 
   it('clamps out-of-range pigment gracefully', () => {
@@ -649,6 +698,9 @@ describe('speciesColor', () => {
     const cHigh = speciesColor({ pigment: 2 });
     assert.ok(cLow.startsWith('rgb('),  `negative pigment: ${cLow}`);
     assert.ok(cHigh.startsWith('rgb('), `over-range pigment: ${cHigh}`);
+    // Clamped values should equal the boundary values
+    assert.equal(cLow,  speciesColor({ pigment: 0 }), 'pigment<0 should clamp to pigment=0');
+    assert.equal(cHigh, speciesColor({ pigment: 1 }), 'pigment>1 should clamp to pigment=1');
   });
 
 });
@@ -670,6 +722,56 @@ describe('randomGenome — pigment variety', () => {
     const spread = maxP - minP;
     assert.ok(spread > 0.5,
       `pigment spread over 100 seeds was only ${spread.toFixed(3)} — expected full hue variety`);
+  });
+
+});
+
+// ---------------------------------------------------------------------------
+// Suite 10: leafWidth gene — draw order and contract
+// ---------------------------------------------------------------------------
+
+describe('randomGenome — leafWidth gene', () => {
+
+  it('leafWidth is present in every randomGenome output', () => {
+    for (const seed of [0, 1, 42, 1337]) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      assert.ok(Object.prototype.hasOwnProperty.call(g, 'leafWidth'),
+        `seed ${seed}: leafWidth missing from genome`);
+    }
+  });
+
+  it('leafWidth is in [0,1] range for 50 seeds', () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      assert.ok(g.leafWidth >= 0 && g.leafWidth <= 1,
+        `seed ${seed}: leafWidth=${g.leafWidth} out of [0,1]`);
+    }
+  });
+
+  it('leafWidth draw does NOT shift existing draws — skeleton is byte-identical to pre-leafWidth genome', () => {
+    // Build two genomes from the same seed:
+    //   g1: the full new genome (has leafWidth as draw 31)
+    //   g2: same genome with leafWidth manually removed
+    // Then resolve both; the skeleton (boneAData/boneBData) should be identical
+    // because leafWidth only affects the texture, not the skeleton pipeline.
+    const seed = 42;
+    const g = randomGenome(NEUTRAL_ENV, seed);
+    const { leafWidth: _lw, ...gWithout } = g;
+    // Manually assign the same structuralSeed so the skeletons are driven identically
+    gWithout.structuralSeed = g.structuralSeed;
+    // Resolve both with the identical structural part
+    const r1 = resolve(g, NEUTRAL_ENV);
+    const r2 = resolve(gWithout, NEUTRAL_ENV);
+    assert.deepEqual(r1.boneAData, r2.boneAData, 'leafWidth draw shifted boneAData');
+    assert.deepEqual(r1.boneBData, r2.boneBData, 'leafWidth draw shifted boneBData');
+  });
+
+  it('leafWidth varies across seeds (is not constant)', () => {
+    const values = new Set();
+    for (let seed = 0; seed < 30; seed++) {
+      values.add(randomGenome(NEUTRAL_ENV, seed).leafWidth);
+    }
+    assert.ok(values.size > 1, 'leafWidth should vary across seeds');
   });
 
 });

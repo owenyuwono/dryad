@@ -33,7 +33,7 @@
 //     Draw 17: apicalBias
 //     Draw 18: droopBias
 //   Cosmetic genes (4 continuous + 1 seed):
-//     Draw 19: pigment      (wide hue spread — full [0,1] range)
+//     Draw 19: pigment      (wide hue spread — full [0,1] range → full HSL hue wheel)
 //     Draw 20: leafSize
 //     Draw 21: leafDensity
 //     Draw 22: jitter
@@ -46,6 +46,8 @@
 //     Draw 28: rootButtress
 //     Draw 29: rootBranchiness
 //     Draw 30: rootTaper
+//   Cosmetic extension (appended AFTER draw 30 — cosmetic/texture-only, no skeleton/foliage shift):
+//     Draw 31: leafWidth
 //
 // NEUTRAL DEFAULTS (geneNeutral) — the sensible middling plant:
 //   branchiness:      0.50   (moderate branching)
@@ -66,10 +68,11 @@
 //   lengthRatio:      0.70   (mid of [0.55,0.85])
 //   apicalBias:       0.50   (balanced leader/lateral)
 //   droopBias:        0.10   (mild droop, mid of [-0.2,0.4])
-//   pigment:          0.45   (green on the ramp)
+//   pigment:          0.45   (on the full-hue wheel this is ~162° = blue-green; TREE_DEFAULT uses 0.33 for green)
 //   leafSize:         1.10   (mid of [0.6,1.6])
 //   leafDensity:      1.00   (mid of [0.5,1.5])
 //   jitter:           1.00   (mid of [0,1.5])
+//   leafWidth:        0.50   (mid of [0,1]; 0.5 = no width change)
 //   structuralSeed:   derived from seed draw, not a neutral offset
 //
 // ENV→GENE BIAS TABLE (envOffset — default-centered):
@@ -113,11 +116,8 @@
 //   pigment:    full [0,1] range (draw maps directly to [0,1])
 //   jitter:     ±0.20 of range
 //
-// speciesColor anchors (pigment ramp, single source of truth):
-//   0.00 → teal        rgb(46,  166, 140)
-//   0.45 → green       rgb(71,  158,  46)
-//   0.70 → olive       rgb(133, 153,  20)
-//   1.00 → warm gold   rgb(184, 107,  15)
+// speciesColor → pigmentToColor (colorRamp.js, single source of truth):
+//   Full HSL hue wheel — pigment 0→1 maps hue 0°→360° (S=0.55, L=0.42).
 //
 // Pure ESM — no three.js dependency.
 // =============================================================================
@@ -129,6 +129,7 @@ import { skin }                    from './skin.js';
 import { FLORA_SCHEMA, clampField } from './genomeSchema.js';
 import { generateFoliage }         from './foliage.js';
 import { growRootSystem, ROOT_SALT } from './roots.js';
+import { pigmentToColor }          from './colorRamp.js';
 
 // ---------------------------------------------------------------------------
 // Neutral gene vector (geneNeutral)
@@ -163,6 +164,7 @@ const NEUTRAL = Object.freeze({
   leafSize:         1.10,
   leafDensity:      1.00,
   jitter:           1.00,
+  leafWidth:        0.50,
   // Root system (draws 24–30)
   rootCount:        0.45,
   rootDepth:        0.45,
@@ -225,6 +227,7 @@ function computeEnvOffset(env) {
     leafSize:         0,
     leafDensity:      0,
     jitter:           0,
+    leafWidth:        0,
     // Root system offsets (0 at neutral env)
     rootCount:        0,
     rootDepth:        0,
@@ -376,6 +379,12 @@ export function randomGenome(env, seed) {
   const rootBranchiness = gene('rootBranchiness', STD);   // draw 29
   const rootTaper       = gene('rootTaper',       STD);   // draw 30
 
+  // --- Cosmetic extension (draw 31) ---
+  // DETERMINISM-CRITICAL: leafWidth is appended LAST, after draw 30 (rootTaper).
+  // This keeps draws 01–30 untouched — existing seeds' skeleton, foliage, and all
+  // other genes remain byte-identical. leafWidth only affects the leaf texture.
+  const leafWidth = gene('leafWidth', STD);               // draw 31
+
   return {
     // Structural
     branchiness,
@@ -402,6 +411,7 @@ export function randomGenome(env, seed) {
     leafSize,
     leafDensity,
     jitter,
+    leafWidth,
     structuralSeed,
     // Root system
     rootCount,
@@ -473,6 +483,7 @@ export function resolve(genome, env) {
     pigment:     genome.pigment,
     leafSize:    genome.leafSize,
     leafDensity: genome.leafDensity,
+    leafWidth:   genome.leafWidth,
     lightFlux:   env.light,
     foliage,
     woodiness:   Math.max(0, Math.min(1, 1 - genome.succulence)),
@@ -484,45 +495,18 @@ export function resolve(genome, env) {
 // ---------------------------------------------------------------------------
 
 /**
- * Map genome.pigment ∈ [0, 1] to a CSS rgb() color string using a piecewise
- * linear ramp. These colors match the shader's pigment ramp so that
- * dendrogram nodes and grid cells correspond visually.
+ * Map genome.pigment ∈ [0, 1] to a CSS rgb() color string.
  *
- * Ramp anchors:
- *   0.00 → teal       (46,  166, 140)
- *   0.45 → green      (71,  158,  46)
- *   0.70 → olive      (133, 153,  20)
- *   1.00 → warm gold  (184, 107,  15)
+ * Delegates to pigmentToColor (colorRamp.js) — the single source of truth
+ * for the pigment→color mapping. UI swatches and leaf textures share the
+ * same color at any pigment value.
+ *
+ * Full hue sweep: pigment 0→1 sweeps hue 0°→360° (HSL, S=0.55, L=0.42).
  */
 export function speciesColor(genome) {
-  const p = genome.pigment < 0 ? 0 : genome.pigment > 1 ? 1 : genome.pigment;
-
-  // Ramp anchor table: [t, r, g, b]
-  const ANCHORS = [
-    [0.00,  46, 166, 140],
-    [0.45,  71, 158,  46],
-    [0.70, 133, 153,  20],
-    [1.00, 184, 107,  15],
-  ];
-
-  // Find the two anchors that bracket p.
-  let lo = ANCHORS[0];
-  let hi = ANCHORS[ANCHORS.length - 1];
-  for (let i = 0; i < ANCHORS.length - 1; i++) {
-    if (p >= ANCHORS[i][0] && p <= ANCHORS[i + 1][0]) {
-      lo = ANCHORS[i];
-      hi = ANCHORS[i + 1];
-      break;
-    }
-  }
-
-  // Lerp between lo and hi.
-  const span = hi[0] - lo[0];
-  const t = span < 1e-10 ? 0 : (p - lo[0]) / span;
-
-  const r = Math.round(lo[1] + t * (hi[1] - lo[1]));
-  const g = Math.round(lo[2] + t * (hi[2] - lo[2]));
-  const b = Math.round(lo[3] + t * (hi[3] - lo[3]));
-
-  return `rgb(${r},${g},${b})`;
+  const [r, g, b] = pigmentToColor(genome.pigment);
+  const ri = Math.round(r * 255);
+  const gi = Math.round(g * 255);
+  const bi = Math.round(b * 255);
+  return `rgb(${ri},${gi},${bi})`;
 }
