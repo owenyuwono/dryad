@@ -1,0 +1,18 @@
+{
+  "name": "demicreatures",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "0.160.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "vite-plugin-glsl": "^1.3.0"
+  }
+}

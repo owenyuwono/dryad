@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procedural Flora — Single Specimen Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+
+  /* Fullscreen canvas */
+  #viewer-canvas {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Control panel — top-left, scrollable */
+  #ui {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    width: 240px;
+    max-height: calc(100vh - 32px);
+    overflow: hidden;
+    background: rgba(8, 10, 14, 0.88);
+    border: 1px solid rgba(80, 120, 160, 0.35);
+    border-radius: 6px;
+    color: #9ab;
+    font-size: 11px;
+    line-height: 1.7;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Always-visible header */
+  #ui-header {
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.2);
+    flex-shrink: 0;
+  }
+
+  #ui h1 {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: #cde;
+    margin-bottom: 10px;
+  }
+
+  /* Seed + Generate row */
+  #ui-seed-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  #ui-seed-row input[type="text"] {
+    flex: 1;
+    background: rgba(20, 30, 40, 0.9);
+    border: 1px solid rgba(80, 120, 160, 0.3);
+    color: #cde;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    outline: none;
+    min-width: 0;
+  }
+  #ui-seed-row button {
+    padding: 4px 10px;
+    background: rgba(20, 40, 60, 0.9);
+    border: 1px solid rgba(80, 160, 220, 0.4);
+    color: #8cf;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  #ui-seed-row button:hover {
+    background: rgba(30, 60, 100, 0.9);
+    border-color: rgba(100, 180, 255, 0.6);
+    color: #adf;
+  }
+
+  /* Tab bar */
+  #ui-tabs {
+    display: flex;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.2);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  #ui-tabs::-webkit-scrollbar { display: none; }
+
+  .tab-btn {
+    flex: 1;
+    padding: 6px 4px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: rgba(120, 160, 200, 0.45);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+    white-space: nowrap;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover {
+    color: rgba(150, 190, 230, 0.8);
+  }
+  .tab-btn.active {
+    color: #8cf;
+    border-bottom-color: #5af;
+  }
+
+  /* Tab panels */
+  #ui-panels {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(80, 120, 160, 0.3) transparent;
+    padding: 12px 14px 14px;
+  }
+  #ui-panels::-webkit-scrollbar { width: 4px; }
+  #ui-panels::-webkit-scrollbar-track { background: transparent; }
+  #ui-panels::-webkit-scrollbar-thumb { background: rgba(80, 120, 160, 0.3); border-radius: 2px; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Shared control styles */
+  #ui label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 6px;
+    color: #7a9;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+  }
+  #ui label .lname { flex: 1; }
+  #ui input[type="text"],
+  #ui select {
+    width: 100%;
+    margin-top: 3px;
+    background: rgba(20, 30, 40, 0.9);
+    border: 1px solid rgba(80, 120, 160, 0.3);
+    color: #cde;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    outline: none;
+  }
+  #ui input[type="range"] {
+    width: 100%;
+    margin-top: 2px;
+    accent-color: #5af;
+  }
+  #ui .val { color: #5af; font-size: 11px; min-width: 34px; text-align: right; }
+  #ui .hint {
+    font-size: 10px;
+    color: rgba(120, 160, 200, 0.55);
+    margin-top: 10px;
+    line-height: 1.4;
+  }
+
+  /* ── STATS PANEL ──────────────────────────────────────── */
+  #stats-panel {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 168px;
+    background: rgba(8, 10, 14, 0.88);
+    border: 1px solid rgba(80, 120, 160, 0.35);
+    border-radius: 6px;
+    padding: 12px 14px;
+    color: #9ab;
+    font-size: 11px;
+    line-height: 1.7;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+  }
+
+  #stats-panel h2 {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(100, 160, 210, 0.6);
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.2);
+    padding-bottom: 6px;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 4px;
+  }
+
+  .stat-label {
+    color: rgba(120, 160, 200, 0.7);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+
+  .stat-val {
+    font-family: 'SF Mono', 'Fira Mono', 'Consolas', monospace;
+    font-size: 11px;
+    color: #8cf;
+    text-align: right;
+  }
+
+  #stat-fps {
+    font-size: 18px;
+    font-weight: 500;
+    font-family: 'SF Mono', 'Fira Mono', 'Consolas', monospace;
+    letter-spacing: -0.02em;
+  }
+
+  .fps-good  { color: #4d8; }
+  .fps-ok    { color: #ca4; }
+  .fps-bad   { color: #e54; }
+
+  .stat-fps-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.15);
+    padding-bottom: 6px;
+  }
+
+  .stat-fps-label {
+    font-size: 10px;
+    color: rgba(120, 160, 200, 0.7);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  #info {
+    position: fixed;
+    bottom: 14px;
+    left: 16px;
+    font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11px;
+    color: rgba(80, 120, 160, 0.6);
+    letter-spacing: 0.01em;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* ── RENDER MODE PANEL ─────────────────────────────────── */
+  #rendermode-panel {
+    position: fixed;
+    top: 16px;
+    left: 268px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    background: rgba(8, 10, 14, 0.88);
+    border: 1px solid rgba(80, 120, 160, 0.35);
+    border-radius: 6px;
+    padding: 6px 8px;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    user-select: none;
+  }
+
+  .rm-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 28px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: rgba(120, 160, 200, 0.55);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s, border-color 0.12s;
+    font-family: inherit;
+    padding: 0;
+    position: relative;
+  }
+
+  .rm-btn:hover {
+    color: rgba(150, 190, 230, 0.9);
+    background: rgba(30, 50, 80, 0.6);
+    border-color: rgba(80, 120, 160, 0.4);
+  }
+
+  .rm-btn.active {
+    color: #8cf;
+    background: rgba(20, 50, 90, 0.85);
+    border-color: rgba(80, 160, 220, 0.55);
+  }
+
+  .rm-btn title {
+    display: none;
+  }
+
+  /* Tooltip via data-label */
+  .rm-btn::after {
+    content: attr(data-label);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(8, 10, 14, 0.92);
+    border: 1px solid rgba(80, 120, 160, 0.4);
+    border-radius: 3px;
+    color: #9ab;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    padding: 2px 6px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+
+  .rm-btn:hover::after {
+    opacity: 1;
+  }
+
+  .rm-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(80, 120, 160, 0.25);
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
+
+  /* Wind strength slider inside the render-mode panel */
+  #wind-strength-slider {
+    width: 56px;
+    accent-color: #5af;
+    cursor: pointer;
+    vertical-align: middle;
+    margin-left: 2px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Fullscreen raymarched canvas -->
+<canvas id="viewer-canvas"></canvas>
+
+<!-- Control panel -->
+<div id="ui">
+
+  <!-- Always-visible header: title + seed + generate -->
+  <div id="ui-header">
+    <h1>Procedural Flora</h1>
+    <div id="ui-seed-row">
+      <input type="text" id="seedInput" value="42" />
+      <button id="generateBtn">Generate</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div id="ui-tabs">
+    <button class="tab-btn active" data-tab="climate">Climate</button>
+    <button class="tab-btn" data-tab="form">Form</button>
+    <button class="tab-btn" data-tab="stem">Stem</button>
+    <button class="tab-btn" data-tab="appendage">App.</button>
+    <button class="tab-btn" data-tab="posture">Posture</button>
+    <button class="tab-btn" data-tab="cosmetic">Look</button>
+    <button class="tab-btn" data-tab="roots">Roots</button>
+  </div>
+
+  <!-- Tab panels -->
+  <div id="ui-panels">
+
+    <!-- ── CLIMATE ─────────────────────────────────────── -->
+    <div class="tab-panel active" data-panel="climate">
+
+      <label><span class="lname">Gravity (Earth=1.0)</span><span class="val" id="gravVal">1.00</span></label>
+      <input type="range" id="gravSlider" min="0.1" max="3.0" step="0.05" value="1.0">
+
+      <label><span class="lname">Medium</span></label>
+      <select id="mediumSel">
+        <option value="air">Air</option>
+        <option value="water">Water</option>
+        <option value="dense_air">Dense Air</option>
+      </select>
+
+      <label><span class="lname">Light</span><span class="val" id="lightVal">0.60</span></label>
+      <input type="range" id="lightSlider" min="0" max="1" step="0.01" value="0.6">
+
+      <label><span class="lname">Sun angle</span><span class="val" id="sunAngleVal">0.25</span></label>
+      <input type="range" id="sunAngleSlider" min="0" max="1" step="0.01" value="0.25">
+
+      <label><span class="lname">Wind</span><span class="val" id="windVal">0.20</span></label>
+      <input type="range" id="windSlider" min="0" max="1" step="0.01" value="0.2">
+
+      <label><span class="lname">Aridity</span><span class="val" id="aridityVal">0.35</span></label>
+      <input type="range" id="ariditySlider" min="0" max="1" step="0.01" value="0.35">
+
+      <label><span class="lname">Temperature</span><span class="val" id="tempVal">0.50</span></label>
+      <input type="range" id="tempSlider" min="0" max="1" step="0.01" value="0.5">
+
+      <div class="hint">Climate changes re-resolve the current genome. Hit Generate to adapt a new random specimen to these conditions.</div>
+    </div>
+
+    <!-- ── FORM ───────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="form">
+
+      <label><span class="lname">Branchiness</span><span class="val" id="brchinessVal">0.50</span></label>
+      <input type="range" id="brchinessSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="branchiness" data-display="brchinessVal">
+
+      <label><span class="lname">Branch factor N</span><span class="val" id="branchFactorNVal">0.33</span></label>
+      <input type="range" id="branchFactorNSlider" min="0" max="1" step="0.01" value="0.33"
+             data-gene="branchFactorN" data-display="branchFactorNVal">
+
+      <label><span class="lname">Tillering</span><span class="val" id="tilleringVal">0.10</span></label>
+      <input type="range" id="tilleringSlider" min="0" max="1" step="0.01" value="0.1"
+             data-gene="tillering" data-display="tilleringVal">
+
+      <label><span class="lname">Radial order</span><span class="val" id="radialOrderVal">0.25</span></label>
+      <input type="range" id="radialOrderSlider" min="0" max="1" step="0.01" value="0.25"
+             data-gene="radialOrder" data-display="radialOrderVal">
+
+      <div class="hint">High branchiness → bushy; low → columnar or single-stem.</div>
+    </div>
+
+    <!-- ── STEM ───────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="stem">
+
+      <label><span class="lname">Succulence</span><span class="val" id="succulenceVal">0.20</span></label>
+      <input type="range" id="succulenceSlider" min="0" max="1" step="0.01" value="0.2"
+             data-gene="succulence" data-display="succulenceVal">
+
+      <label><span class="lname">Stem girth</span><span class="val" id="stemGirthVal">0.40</span></label>
+      <input type="range" id="stemGirthSlider" min="0" max="1" step="0.01" value="0.4"
+             data-gene="stemGirth" data-display="stemGirthVal">
+
+      <label><span class="lname">Taper</span><span class="val" id="taperVal">0.50</span></label>
+      <input type="range" id="taperSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="taper" data-display="taperVal">
+
+      <label><span class="lname">Ribbing</span><span class="val" id="ribbingVal">0.05</span></label>
+      <input type="range" id="ribbingSlider" min="0" max="1" step="0.01" value="0.05"
+             data-gene="ribbing" data-display="ribbingVal">
+
+      <label><span class="lname">Segmentation</span><span class="val" id="segmentationVal">0.20</span></label>
+      <input type="range" id="segmentationSlider" min="0" max="1" step="0.01" value="0.2"
+             data-gene="segmentation" data-display="segmentationVal">
+
+      <label><span class="lname">Spininess</span><span class="val" id="spininessVal">0.05</span></label>
+      <input type="range" id="spininessSlider" min="0" max="1" step="0.01" value="0.05"
+             data-gene="spininess" data-display="spininessVal">
+
+      <div class="hint">High succulence → swollen cactus body. Low → bark trunk.</div>
+    </div>
+
+    <!-- ── APPENDAGE ──────────────────────────────────── -->
+    <div class="tab-panel" data-panel="appendage">
+
+      <label><span class="lname">Breadth</span><span class="val" id="appendageBreadthVal">0.45</span></label>
+      <input type="range" id="appendageBreadthSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="appendageBreadth" data-display="appendageBreadthVal">
+
+      <label><span class="lname">Density</span><span class="val" id="appendageDensityVal">0.40</span></label>
+      <input type="range" id="appendageDensitySlider" min="0" max="1" step="0.01" value="0.4"
+             data-gene="appendageDensity" data-display="appendageDensityVal">
+
+      <div class="hint">Controls leaf/frond/pad appendages along branches.</div>
+    </div>
+
+    <!-- ── POSTURE ────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="posture">
+
+      <label><span class="lname">Verticality</span><span class="val" id="verticalityVal">0.50</span></label>
+      <input type="range" id="verticalitySlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="verticality" data-display="verticalityVal">
+
+      <label><span class="lname">Rigidity</span><span class="val" id="rigidityVal">0.60</span></label>
+      <input type="range" id="rigiditySlider" min="0" max="1" step="0.01" value="0.6"
+             data-gene="rigidity" data-display="rigidityVal">
+
+      <label><span class="lname">Branch angle</span><span class="val" id="branchAngleVal">0.58</span></label>
+      <input type="range" id="branchAngleSlider" min="0.35" max="0.80" step="0.01" value="0.575"
+             data-gene="branchAngle" data-display="branchAngleVal">
+
+      <label><span class="lname">Length ratio</span><span class="val" id="lengthRatioVal">0.70</span></label>
+      <input type="range" id="lengthRatioSlider" min="0.55" max="0.85" step="0.01" value="0.7"
+             data-gene="lengthRatio" data-display="lengthRatioVal">
+
+      <label><span class="lname">Apical bias</span><span class="val" id="apicalBiasVal">0.50</span></label>
+      <input type="range" id="apicalBiasSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="apicalBias" data-display="apicalBiasVal">
+
+      <label><span class="lname">Droop bias</span><span class="val" id="droopBiasVal">0.10</span></label>
+      <input type="range" id="droopBiasSlider" min="-0.2" max="0.4" step="0.01" value="0.1"
+             data-gene="droopBias" data-display="droopBiasVal">
+
+      <div class="hint">Droop bias negative → upswept; positive → weeping form.</div>
+    </div>
+
+    <!-- ── COSMETIC ───────────────────────────────────── -->
+    <div class="tab-panel" data-panel="cosmetic">
+
+      <label><span class="lname">Pigment</span><span class="val" id="pigmentVal">0.45</span></label>
+      <input type="range" id="pigmentSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="pigment" data-display="pigmentVal">
+
+      <label><span class="lname">Leaf size</span><span class="val" id="leafSizeVal">1.10</span></label>
+      <input type="range" id="leafSizeSlider" min="0.6" max="1.6" step="0.01" value="1.1"
+             data-gene="leafSize" data-display="leafSizeVal">
+
+      <label><span class="lname">Leaf density</span><span class="val" id="leafDensityVal">1.00</span></label>
+      <input type="range" id="leafDensitySlider" min="0.5" max="1.5" step="0.01" value="1.0"
+             data-gene="leafDensity" data-display="leafDensityVal">
+
+      <label><span class="lname">Jitter</span><span class="val" id="jitterVal">1.00</span></label>
+      <input type="range" id="jitterSlider" min="0" max="1.5" step="0.01" value="1.0"
+             data-gene="jitter" data-display="jitterVal">
+
+      <div class="hint">drag to orbit &nbsp;·&nbsp; wheel to zoom<br>shift-drag / right-drag to pan</div>
+    </div>
+
+    <!-- ── ROOTS ─────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="roots">
+
+      <label><span class="lname">Root count</span><span class="val" id="rootCountVal">0.45</span></label>
+      <input type="range" id="rootCountSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="rootCount" data-display="rootCountVal">
+
+      <label><span class="lname">Root depth</span><span class="val" id="rootDepthVal">0.45</span></label>
+      <input type="range" id="rootDepthSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="rootDepth" data-display="rootDepthVal">
+
+      <label><span class="lname">Root spread</span><span class="val" id="rootSpreadVal">0.50</span></label>
+      <input type="range" id="rootSpreadSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="rootSpread" data-display="rootSpreadVal">
+
+      <label><span class="lname">Root flare</span><span class="val" id="rootFlareVal">0.30</span></label>
+      <input type="range" id="rootFlareSlider" min="0" max="1" step="0.01" value="0.3"
+             data-gene="rootFlare" data-display="rootFlareVal">
+
+      <label><span class="lname">Buttress</span><span class="val" id="rootButtressVal">0.15</span></label>
+      <input type="range" id="rootButtressSlider" min="0" max="1" step="0.01" value="0.15"
+             data-gene="rootButtress" data-display="rootButtressVal">
+
+      <label><span class="lname">Root branchiness</span><span class="val" id="rootBranchinessVal">0.45</span></label>
+      <input type="range" id="rootBranchinessSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="rootBranchiness" data-display="rootBranchinessVal">
+
+      <label><span class="lname">Root taper</span><span class="val" id="rootTaperVal">0.50</span></label>
+      <input type="range" id="rootTaperSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="rootTaper" data-display="rootTaperVal">
+
+      <div class="hint">High depth → deep taproot. High spread → wide plate roots. Reveal roots to see underground geometry.</div>
+    </div>
+
+  </div><!-- #ui-panels -->
+</div><!-- #ui -->
+
+<!-- Stats panel — top-right -->
+<div id="stats-panel">
+  <h2>Render Stats</h2>
+  <div class="stat-fps-row">
+    <span class="stat-fps-label">FPS</span>
+    <span id="stat-fps" class="fps-good">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Triangles</span>
+    <span class="stat-val" id="stat-triangles">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Draw calls</span>
+    <span class="stat-val" id="stat-drawcalls">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Leaf clusters</span>
+    <span class="stat-val" id="stat-leafclusters">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Bones</span>
+    <span class="stat-val" id="stat-bones">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Resolution</span>
+    <span class="stat-val" id="stat-resolution">--</span>
+  </div>
+</div>
+
+<!-- Render-mode panel — bottom-center, does not overlap #ui (top-left) or #stats-panel (top-right) -->
+<div id="rendermode-panel">
+  <button class="rm-btn" data-mode="lit" data-label="Lit (PBR)">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="8" cy="8" r="3.5" fill="currentColor"/>
+      <line x1="8" y1="1" x2="8" y2="3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="8" y1="13" x2="8" y2="15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="1" y1="8" x2="3" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="13" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="2.93" y1="2.93" x2="4.34" y2="4.34" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="11.66" y1="11.66" x2="13.07" y2="13.07" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="13.07" y1="2.93" x2="11.66" y2="4.34" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="4.34" y1="11.66" x2="2.93" y2="13.07" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+  </button>
+  <button class="rm-btn" data-mode="unlit" data-label="Unlit">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M8 2 A6 6 0 0 1 8 14 Z" fill="currentColor"/>
+      <path d="M8 2 A6 6 0 0 0 8 14 Z" fill="currentColor" opacity="0.35"/>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2" fill="none"/>
+    </svg>
+  </button>
+  <div class="rm-divider"></div>
+  <button class="rm-btn" data-mode="wireframe" data-label="Wireframe">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/>
+      <line x1="2" y1="2" x2="14" y2="14" stroke="currentColor" stroke-width="1.0"/>
+      <line x1="14" y1="2" x2="2" y2="14" stroke="currentColor" stroke-width="1.0"/>
+      <line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="1.0"/>
+      <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.0"/>
+    </svg>
+  </button>
+  <button class="rm-btn" data-mode="normals" data-label="Normals">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <polygon points="8,2 14,13 2,13" stroke="currentColor" stroke-width="1.2" fill="none"/>
+      <line x1="8" y1="9" x2="8" y2="4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="8" y1="4" x2="6" y2="6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      <line x1="8" y1="4" x2="10" y2="6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+    </svg>
+  </button>
+  <button class="rm-btn" data-mode="ao" data-label="AO">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" fill="currentColor" opacity="0.9"/>
+      <rect x="9" y="2" width="5" height="5" fill="currentColor" opacity="0.6"/>
+      <rect x="2" y="9" width="5" height="5" fill="currentColor" opacity="0.35"/>
+      <rect x="9" y="9" width="5" height="5" fill="currentColor" opacity="0.15"/>
+    </svg>
+  </button>
+  <div class="rm-divider"></div>
+  <button class="rm-btn" id="reveal-roots-btn" data-label="Reveal roots" title="Reveal roots">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <line x1="8" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="8" y1="8" x2="8" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="2 1.5"/>
+      <line x1="4" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      <line x1="12" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      <line x1="5" y1="7" x2="8" y2="10" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" opacity="0.6"/>
+      <line x1="11" y1="7" x2="8" y2="10" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" opacity="0.6"/>
+    </svg>
+  </button>
+  <div class="rm-divider"></div>
+  <button class="rm-btn" id="wind-toggle-btn" data-label="Toggle wind" title="Toggle wind">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M2 6 Q5 4 8 6 Q11 8 14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+      <path d="M2 9.5 Q5 7.5 9 9.5 Q11.5 11 13 9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+      <path d="M2 12.5 Q4 11 7 12.5" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" fill="none" opacity="0.65"/>
+    </svg>
+  </button>
+  <input type="range" id="wind-strength-slider"
+         min="0" max="1.5" step="0.05" value="0.6"
+         title="Wind strength">
+</div>
+
+<div id="info">procedural flora · single specimen explorer</div>
+
+<script type="module" src="/src/main.js"></script>
+
+<script>
+// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
+(function () {
+  const STORAGE_KEY = 'flora-active-tab';
+  const tabBtns   = document.querySelectorAll('.tab-btn');
+  const tabPanels = document.querySelectorAll('.tab-panel');
+
+  function activateTab(name) {
+    tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
+    tabPanels.forEach(panel => panel.classList.toggle('active', panel.dataset.panel === name));
+    try { sessionStorage.setItem(STORAGE_KEY, name); } catch (_) {}
+  }
+
+  // Restore previously active tab (sessionStorage so it survives hot-reload)
+  const saved = (() => { try { return sessionStorage.getItem(STORAGE_KEY); } catch (_) { return null; } })();
+  if (saved && document.querySelector(`.tab-btn[data-tab="${saved}"]`)) {
+    activateTab(saved);
+  }
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  });
+})();
+</script>
+</body>
+</html>

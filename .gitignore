@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.playwright-mcp/
+.claude/settings.local.json
+*.log
+.DS_Store
