@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   leafHalfWidth,
+  leafBaseParams,
   clusterLeafCount,
   clusterLeafParams,
   makeLeafClusterTexture,
@@ -248,4 +249,105 @@ test('growVenation nodes are all within bounding box of outline', async () => {
     assert.ok(n.x >= -0.5 && n.x <= 0.5, `node x=${n.x.toFixed(3)} out of range`);
     assert.ok(n.y >= -0.1 && n.y <= 1.1, `node y=${n.y.toFixed(3)} out of range`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Shape gene tests — leafBaseParams and superformulaOutline driven by genes
+// ---------------------------------------------------------------------------
+
+function makeOutline(genes, steps = 120) {
+  const params = leafBaseParams(genes);
+  return superformulaOutline(params, steps);
+}
+
+function outlineWidth(outline) {
+  const xs = outline.map(p => p.x);
+  return Math.max(...xs) - Math.min(...xs);
+}
+
+function outlineHeight(outline) {
+  const ys = outline.map(p => p.y);
+  return Math.max(...ys) - Math.min(...ys);
+}
+
+function aspectRatio(outline) {
+  return outlineWidth(outline) / outlineHeight(outline);
+}
+
+// leafWidth↑ → broader (larger width-to-length aspect ratio)
+test('leafWidth↑ → wider aspect ratio (monotonically)', () => {
+  const levels = [0.1, 0.3, 0.5, 0.7, 0.9];
+  const ratios = levels.map(w => aspectRatio(makeOutline({ leafWidth: w, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 0 })));
+  for (let i = 1; i < ratios.length; i++) {
+    assert.ok(ratios[i] > ratios[i-1], `leafWidth ${levels[i-1]}→${levels[i]}: ratio should increase, got ${ratios[i-1].toFixed(4)}→${ratios[i].toFixed(4)}`);
+  }
+});
+
+// leafLength↑ → taller → smaller aspect ratio (more height relative to width)
+test('leafLength↑ → smaller aspect ratio (taller leaf, monotonically)', () => {
+  const levels = [0.1, 0.3, 0.5, 0.7, 0.9];
+  const ratios = levels.map(l => aspectRatio(makeOutline({ leafWidth: 0.5, leafLength: l, leafTip: 0.4, leafSerration: 0, leafLobing: 0 })));
+  for (let i = 1; i < ratios.length; i++) {
+    assert.ok(ratios[i] < ratios[i-1], `leafLength ${levels[i-1]}→${levels[i]}: aspect should decrease (taller leaf), got ${ratios[i-1].toFixed(4)}→${ratios[i].toFixed(4)}`);
+  }
+});
+
+// leafTip↑ → rounder tip (more width near y=1)
+test('leafTip↑ → rounder tip (more width near y=1)', () => {
+  const levels = [0.1, 0.3, 0.5, 0.7, 0.9];
+  function tipWidth(genes) {
+    const outline = makeOutline(genes, 120);
+    const tipPts = outline.filter(p => p.y > 0.9);
+    if (tipPts.length === 0) return 0;
+    return Math.max(...tipPts.map(p => Math.abs(p.x)));
+  }
+  const widths = levels.map(t => tipWidth({ leafWidth: 0.5, leafLength: 0.45, leafTip: t, leafSerration: 0, leafLobing: 0 }));
+  for (let i = 1; i < widths.length; i++) {
+    assert.ok(widths[i] > widths[i-1], `leafTip ${levels[i-1]}→${levels[i]}: tip width should increase, got ${widths[i-1].toFixed(4)}→${widths[i].toFixed(4)}`);
+  }
+});
+
+// leafSerration↑ → more edge undulation (perimeter arc-length increases)
+test('leafSerration↑ → longer perimeter arc-length (monotonically)', () => {
+  function perimeterLength(outline) {
+    let len = 0;
+    const N = outline.length;
+    for (let i = 0; i < N; i++) {
+      const a = outline[i];
+      const b = outline[(i + 1) % N];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      len += Math.sqrt(dx*dx + dy*dy);
+    }
+    return len;
+  }
+  const levels = [0.0, 0.25, 0.5, 0.75, 1.0];
+  const perims = levels.map(s => perimeterLength(makeOutline({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: s, leafLobing: 0 }, 120)));
+  for (let i = 1; i < perims.length; i++) {
+    assert.ok(perims[i] > perims[i-1], `leafSerration ${levels[i-1]}→${levels[i]}: perimeter should increase, got ${perims[i-1].toFixed(4)}→${perims[i].toFixed(4)}`);
+  }
+});
+
+// leafLobing↑ → more lobe maxima in outline x-width
+test('leafLobing↑ → more lobe maxima in outline x-width', () => {
+  function countXMaxima(outline) {
+    const xs = outline.map(p => Math.abs(p.x));
+    let count = 0;
+    const N = xs.length;
+    for (let i = 1; i < N - 1; i++) {
+      if (xs[i] > xs[i-1] && xs[i] > xs[i+1]) count++;
+    }
+    return count;
+  }
+  const lo = countXMaxima(makeOutline({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 0.0 }, 120));
+  const hi = countXMaxima(makeOutline({ leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0, leafLobing: 1.0 }, 120));
+  assert.ok(hi > lo, `leafLobing: high lobing maxima count ${hi} should exceed low ${lo}`);
+});
+
+// determinism: same genes → identical outline
+test('superformulaOutline is deterministic: same genes → identical outline', () => {
+  const genes = { leafWidth: 0.5, leafLength: 0.45, leafTip: 0.4, leafSerration: 0.3, leafLobing: 0.2 };
+  const o1 = makeOutline(genes, 120);
+  const o2 = makeOutline(genes, 120);
+  assert.deepStrictEqual(o1, o2, 'outline should be identical for same gene inputs');
 });

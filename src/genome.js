@@ -48,6 +48,10 @@
 //     Draw 30: rootTaper
 //   Cosmetic extension (appended AFTER draw 30 — cosmetic/texture-only, no skeleton/foliage shift):
 //     Draw 31: leafWidth
+//     Draw 32: leafLength
+//     Draw 33: leafTip
+//     Draw 34: leafSerration
+//     Draw 35: leafLobing
 //
 // NEUTRAL DEFAULTS (geneNeutral) — the sensible middling plant:
 //   branchiness:      0.50   (moderate branching)
@@ -72,7 +76,11 @@
 //   leafSize:         1.10   (mid of [0.6,1.6])
 //   leafDensity:      1.00   (mid of [0.5,1.5])
 //   jitter:           1.00   (mid of [0,1.5])
-//   leafWidth:        0.50   (mid of [0,1]; 0.5 = no width change)
+//   leafWidth:        0.50   (mid of [0,1]; 0.5 = medium breadth via superformula)
+//   leafLength:       0.45   (moderate elongation; maps to axialStretch≈2.35)
+//   leafTip:          0.40   (slightly pointed; maps to n1≈1.24)
+//   leafSerration:    0.00   (smooth margin by default)
+//   leafLobing:       0.00   (simple ovate, m=2, no lobes)
 //   structuralSeed:   derived from seed draw, not a neutral offset
 //
 // ENV→GENE BIAS TABLE (envOffset — default-centered):
@@ -165,6 +173,10 @@ const NEUTRAL = Object.freeze({
   leafDensity:      1.00,
   jitter:           1.00,
   leafWidth:        0.50,
+  leafLength:       0.45,
+  leafTip:          0.40,
+  leafSerration:    0.00,
+  leafLobing:       0.00,
   // Root system (draws 24–30)
   rootCount:        0.45,
   rootDepth:        0.45,
@@ -228,6 +240,10 @@ function computeEnvOffset(env) {
     leafDensity:      0,
     jitter:           0,
     leafWidth:        0,
+    leafLength:       0,
+    leafTip:          0,
+    leafSerration:    0,
+    leafLobing:       0,
     // Root system offsets (0 at neutral env)
     rootCount:        0,
     rootDepth:        0,
@@ -379,11 +395,15 @@ export function randomGenome(env, seed) {
   const rootBranchiness = gene('rootBranchiness', STD);   // draw 29
   const rootTaper       = gene('rootTaper',       STD);   // draw 30
 
-  // --- Cosmetic extension (draw 31) ---
-  // DETERMINISM-CRITICAL: leafWidth is appended LAST, after draw 30 (rootTaper).
+  // --- Cosmetic extension (draws 31–35) ---
+  // DETERMINISM-CRITICAL: these draws are appended LAST, after draw 30 (rootTaper).
   // This keeps draws 01–30 untouched — existing seeds' skeleton, foliage, and all
-  // other genes remain byte-identical. leafWidth only affects the leaf texture.
-  const leafWidth = gene('leafWidth', STD);               // draw 31
+  // other genes remain byte-identical. These genes only affect the leaf texture.
+  const leafWidth     = gene('leafWidth',     STD);       // draw 31
+  const leafLength    = gene('leafLength',    STD);       // draw 32
+  const leafTip       = gene('leafTip',       STD);       // draw 33
+  const leafSerration = gene('leafSerration', STD);       // draw 34
+  const leafLobing    = gene('leafLobing',    STD);       // draw 35
 
   return {
     // Structural
@@ -412,6 +432,10 @@ export function randomGenome(env, seed) {
     leafDensity,
     jitter,
     leafWidth,
+    leafLength,
+    leafTip,
+    leafSerration,
+    leafLobing,
     structuralSeed,
     // Root system
     rootCount,
@@ -483,7 +507,11 @@ export function resolve(genome, env) {
     pigment:     genome.pigment,
     leafSize:    genome.leafSize,
     leafDensity: genome.leafDensity,
-    leafWidth:   genome.leafWidth,
+    leafWidth:     genome.leafWidth,
+    leafLength:    genome.leafLength,
+    leafTip:       genome.leafTip,
+    leafSerration: genome.leafSerration,
+    leafLobing:    genome.leafLobing,
     lightFlux:   env.light,
     foliage,
     woodiness:   Math.max(0, Math.min(1, 1 - genome.succulence)),

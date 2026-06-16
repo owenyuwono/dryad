@@ -56,6 +56,25 @@
     margin-bottom: 10px;
   }
 
+  /* Preset picker row */
+  #ui-preset-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  #ui-preset-row label {
+    flex-shrink: 0;
+    color: rgba(120, 160, 200, 0.7);
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    margin-top: 0;
+  }
+  #ui-preset-row select {
+    flex: 1;
+    margin-top: 0;
+  }
+
   /* Seed + Generate row */
   #ui-seed-row {
     display: flex;
@@ -381,9 +400,19 @@
 <!-- Control panel -->
 <div id="ui">
 
-  <!-- Always-visible header: title + seed + generate -->
+  <!-- Always-visible header: title + preset + seed + generate -->
   <div id="ui-header">
     <h1>Procedural Flora</h1>
+    <div id="ui-preset-row">
+      <label for="presetSelect">Preset</label>
+      <select id="presetSelect">
+        <option value="tree">Tree</option>
+        <option value="maple">Maple</option>
+        <option value="birch">Birch</option>
+        <option value="bush">Bush</option>
+        <option value="weeping">Weeping</option>
+      </select>
+    </div>
     <div id="ui-seed-row">
       <input type="text" id="seedInput" value="42" />
       <button id="rerollSeedBtn" title="New individual — reroll seed only (keeps all genes &amp; climate)" aria-label="Reroll seed">
@@ -556,9 +585,25 @@
       <input type="range" id="jitterSlider" min="0" max="1.5" step="0.01" value="1.0"
              data-gene="jitter" data-display="jitterVal">
 
-      <label><span class="lname">Leaf width</span><span class="val" id="leafWidthVal">0.50</span></label>
+      <label><span class="lname">Leaf breadth</span><span class="val" id="leafWidthVal">0.50</span></label>
       <input type="range" id="leafWidthSlider" min="0" max="1" step="0.01" value="0.5"
              data-gene="leafWidth" data-display="leafWidthVal">
+
+      <label><span class="lname">Leaf length</span><span class="val" id="leafLengthVal">0.45</span></label>
+      <input type="range" id="leafLengthSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="leafLength" data-display="leafLengthVal">
+
+      <label><span class="lname">Leaf tip</span><span class="val" id="leafTipVal">0.40</span></label>
+      <input type="range" id="leafTipSlider" min="0" max="1" step="0.01" value="0.40"
+             data-gene="leafTip" data-display="leafTipVal">
+
+      <label><span class="lname">Leaf serration</span><span class="val" id="leafSerrationVal">0.00</span></label>
+      <input type="range" id="leafSerrationSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="leafSerration" data-display="leafSerrationVal">
+
+      <label><span class="lname">Leaf lobing</span><span class="val" id="leafLobingVal">0.00</span></label>
+      <input type="range" id="leafLobingSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="leafLobing" data-display="leafLobingVal">
 
       <div class="hint">drag to orbit &nbsp;·&nbsp; wheel to zoom<br>shift-drag / right-drag to pan</div>
     </div>

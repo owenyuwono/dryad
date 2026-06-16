@@ -59,6 +59,11 @@ function makeFloraParent() {
     leafDensity:      1.0,
     jitter:           0.5,
     leafWidth:        0.5,
+    // leaf-shape genes (draws 32-35)
+    leafLength:       0.45,
+    leafTip:          0.40,
+    leafSerration:    0.00,
+    leafLobing:       0.00,
     structuralSeed:   0xDEADBEEF,
     // root system tier (added Task 1 — required so genomeDistance is non-NaN)
     rootCount:        0.45,

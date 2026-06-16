@@ -209,10 +209,50 @@ export const FLORA_SCHEMA = Object.freeze({
   }),
 
   /**
-   * Leaf lateral width multiplier; 0 = narrow blade, 0.5 = default (no change),
-   * 1 = broad leaf. Affects the leaf cluster texture only (cosmetic, no skeleton impact).
+   * Leaf lateral breadth: drives superformula n2+a to produce narrow blade (0) ↔ broad leaf (1).
+   * Cosmetic only — affects leaf cluster texture, no skeleton impact. Draw 31.
    */
   leafWidth: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf elongation via superformula axialStretch; 0 = short/round, 1 = long/lanceolate.
+   * Cosmetic only — texture only. Draw 32.
+   */
+  leafLength: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf tip sharpness via superformula n1; 0 = pointed/acuminate, 1 = rounded/obtuse.
+   * Cosmetic only — texture only. Draw 33.
+   */
+  leafTip: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf margin serration; 0 = smooth, 1 = toothed. Drives serration + serrationFreq.
+   * Cosmetic only — texture only. Draw 34.
+   */
+  leafSerration: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf lobing via superformula m; 0 = simple ovate (m≈2), 1 = palmate (m≈5).
+   * Non-integer m morphs lobe count continuously. Cosmetic only — texture only. Draw 35.
+   */
+  leafLobing: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),

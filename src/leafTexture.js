@@ -54,7 +54,7 @@ export function superformulaPoint(theta, params) {
 }
 
 export function superformulaOutline(params, steps = 120) {
-  const { axialStretch = 2, serration = 0, serrationFreq = 10 } = params;
+  const { axialStretch = 2, serration = 0, serrationFreq = 10, xScale = 1 } = params;
 
   // 1. Sample raw points
   const raw = [];
@@ -91,11 +91,11 @@ export function superformulaOutline(params, steps = 120) {
     if (p.y > maxY) maxY = p.y;
   }
 
-  // 5. Translate base to y=0, scale so tip is at y=1
+  // 5. Translate base to y=0, scale so tip is at y=1; apply xScale to width
   const leafLen = maxY - minY;
   if (leafLen === 0) return rotated; // degenerate
   const normalized = rotated.map(p => ({
-    x: p.x / leafLen,
+    x: (p.x / leafLen) * xScale,
     y: (p.y - minY) / leafLen,
   }));
 
@@ -284,19 +284,49 @@ export function clusterLeafCount(seed) {
 // Internal helpers for variant params and leaf drawing.
 // ---------------------------------------------------------------------------
 
-const BASE_LEAF_PARAMS = { m: 2, n1: 1, n2: 4, n3: 8, a: 1, b: 1 };
+/**
+ * Derive superformula base params from the 5 leaf-shape genes.
+ * All genes are [0,1].
+ *
+ * Gene → param mappings:
+ *   leafWidth    → xScale: [0.4, 1.6]  post-normalization x-scale; 0=narrow, 1=broad.
+ *                  (n2 is fixed at 4 for a clean ovate base; width is via xScale
+ *                  applied AFTER y-normalization so it scales the whole outline uniformly.)
+ *   leafLength   → axialStretch: [1.0, 4.0]  (short/round → long/lanceolate)
+ *   leafTip      → n1: [0.4, 2.5]  (low = pointed/acuminate, high = rounded/obtuse)
+ *   leafSerration→ serration: [0, 0.12]; serrationFreq: [6, 18]
+ *   leafLobing   → m: [2, 5]  (2 = simple ovate; 5 = palmate; non-integer = partial)
+ *
+ * Default (simple ovate): leafWidth=0.5 → xScale=1.0, leafTip=0.4 → n1≈1.24,
+ *   leafLength=0.45 → axialStretch=2.35, leafSerration=0, leafLobing=0 → m=2.
+ */
+export function leafBaseParams(genes) {
+  const { leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4, leafSerration = 0, leafLobing = 0 } = genes;
+  const m             = 2 + leafLobing * 3;              // [2, 5] — lobe count
+  const n1            = 0.4 + leafTip * 2.1;             // [0.4, 2.5] — low=sharp tip, high=round
+  const n2            = 4;                               // fixed: baseline ovate outline
+  const n3            = 4;                               // symmetric
+  const a             = 1.0;
+  const b             = 1.0;
+  const axialStretch  = 1.0 + leafLength * 3.0;          // [1.0, 4.0] — low=round, high=elongated
+  const xScale        = 0.4 + leafWidth * 1.2;           // [0.4, 1.6] — low=narrow, high=broad
+  const serration     = leafSerration * 0.12;             // [0, 0.12]
+  const serrationFreq = 6 + leafSerration * 12;           // [6, 18]
+  return { m, n1, n2, n3, a, b, axialStretch, xScale, serration, serrationFreq };
+}
 
 function leafVariantParams(baseParams, rng) {
   return {
-    m: baseParams.m,
-    n1: baseParams.n1 * (0.85 + rng() * 0.30),
-    n2: baseParams.n2 * (0.80 + rng() * 0.40),
-    n3: baseParams.n3 * (0.80 + rng() * 0.40),
-    a: 1,
-    b: 1 + (rng() - 0.5) * 0.3,
-    axialStretch: 1.8 + rng() * 0.6,
-    serration: rng() * 0.08,
-    serrationFreq: 8 + Math.floor(rng() * 6),
+    m:             baseParams.m,
+    n1:            baseParams.n1 * (0.85 + rng() * 0.30),
+    n2:            baseParams.n2 * (0.80 + rng() * 0.40),
+    n3:            baseParams.n3 * (0.80 + rng() * 0.40),
+    a:             baseParams.a,
+    b:             baseParams.b + (rng() - 0.5) * 0.3,
+    axialStretch:  baseParams.axialStretch * (0.85 + rng() * 0.30),
+    xScale:        baseParams.xScale,
+    serration:     baseParams.serration,
+    serrationFreq: baseParams.serrationFreq,
   };
 }
 
@@ -304,15 +334,15 @@ function toI(v) {
   return Math.round(Math.max(0, Math.min(1, v)) * 255);
 }
 
-function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, venation, widthMul = 1.0) {
+function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, venation) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
 
-  // Scale: x → point.x * leafH * 0.5 * widthMul, y → -point.y * leafH (tip up)
-  // widthMul: derived from leafWidth gene; 1.0 = unchanged, <1.0 = narrow, >1.0 = broad.
+  // Scale: x → point.x * leafH * 0.5, y → -point.y * leafH (tip up).
+  // Width is controlled via superformula params (leafBaseParams), not a post-scale.
   const scaled = outline.map(p => ({
-    x: p.x * leafH * 0.5 * widthMul,
+    x: p.x * leafH * 0.5,
     y: -p.y * leafH,
   }));
 
@@ -338,9 +368,9 @@ function drawLeaf(ctx, cx, cy, leafH, angle, fillColor, veinColor, outline, vena
   for (const edge of venation.edges) {
     const fromNode = venation.nodes[edge.from];
     const toNode = venation.nodes[edge.to];
-    const fx = fromNode.x * leafH * 0.5 * widthMul;
+    const fx = fromNode.x * leafH * 0.5;
     const fy = -fromNode.y * leafH;
-    const tx = toNode.x * leafH * 0.5 * widthMul;
+    const tx = toNode.x * leafH * 0.5;
     const ty = -toNode.y * leafH;
     ctx.lineWidth = Math.max(0.4, leafH * 0.012 * Math.pow(0.6, toNode.depth * 0.25));
     ctx.beginPath();
@@ -370,7 +400,11 @@ function lightenColor(cssColor, amount) {
 // Public API — cluster texture.
 // ---------------------------------------------------------------------------
 
-export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resolution = 'high', leafWidth = 0.5 }) {
+export function makeLeafClusterTexture({
+  pigment, breadth = 0.5, seed = 1, resolution = 'high',
+  leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4,
+  leafSerration = 0.0, leafLobing = 0.0,
+}) {
   if (typeof document === 'undefined') {
     return null;
   }
@@ -385,8 +419,9 @@ export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resol
   const [baseR, baseG, baseB] = pigmentToColor(pigment);
   const [baseH, baseS, baseL] = rgbToHsl(baseR, baseG, baseB);
 
-  // leafWidth 0..1 → widthMul 0.5..1.5; at leafWidth=0.5 → widthMul=1.0 (no change).
-  const widthMul = 0.5 + leafWidth;
+  // Derive superformula base params from the 5 leaf-shape genes.
+  // Width/length/tip/serration/lobing are all encoded in the params; no post X-scale.
+  const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing });
 
   const count = clusterLeafCount(seed);
   const leaves = clusterLeafParams(seed, count);
@@ -402,7 +437,7 @@ export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resol
   for (const leaf of drawOrder) {
     const leafIdx = leaf.i;
     const variantRng = mulberry32((seed * 1009 + leafIdx * 37) >>> 0);
-    const variantParams = leafVariantParams(BASE_LEAF_PARAMS, variantRng);
+    const variantParams = leafVariantParams(baseParams, variantRng);
 
     const outline = superformulaOutline(variantParams, 120);
     const venation = growVenation(
@@ -423,7 +458,7 @@ export function makeLeafClusterTexture({ pigment, breadth = 0.5, seed = 1, resol
     const by = attachY - leaf.oy * SIZE;
     const scaledLeafH = leafH * leaf.scale;
 
-    drawLeaf(ctx, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation, widthMul);
+    drawLeaf(ctx, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation);
   }
 
   return { source: canvas, width: SIZE, height: SIZE };

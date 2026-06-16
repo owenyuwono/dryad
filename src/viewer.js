@@ -763,10 +763,14 @@ export function createViewer(canvas) {
         }
 
         const texData = makeLeafClusterTexture({
-          pigment:   resolved.pigment,
-          breadth:   resolved.foliage.shape,
-          seed:      1,
-          leafWidth: resolved.leafWidth ?? 0.5,
+          pigment:       resolved.pigment,
+          breadth:       resolved.foliage.shape,
+          seed:          1,
+          leafWidth:     resolved.leafWidth     ?? 0.5,
+          leafLength:    resolved.leafLength    ?? 0.45,
+          leafTip:       resolved.leafTip       ?? 0.4,
+          leafSerration: resolved.leafSerration ?? 0.0,
+          leafLobing:    resolved.leafLobing    ?? 0.0,
         });
         if (texData !== null) {
           const tex = new THREE.CanvasTexture(texData.source);

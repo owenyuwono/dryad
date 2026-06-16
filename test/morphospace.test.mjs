@@ -68,6 +68,10 @@ const NEUTRAL_FILL = Object.freeze({
   leafDensity:  1.0,
   jitter:       1.0,
   leafWidth:    0.5,
+  leafLength:    0.45,
+  leafTip:       0.40,
+  leafSerration: 0.00,
+  leafLobing:    0.00,
   // taper is in FLORA_SCHEMA but NOT in the per-form table; fill with neutral
   taper:        0.50,
 });

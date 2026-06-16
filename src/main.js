@@ -1,6 +1,7 @@
 import { randomGenome, resolve }          from './genome.js';
 import { createViewer }                   from './viewer.js';
 import { createRenderModeController }     from './renderModes.js';
+import { TREE_DEFAULT, PRESETS }          from './presets.js';
 
 // =============================================================================
 // MODULE STATE
@@ -23,6 +24,7 @@ const MORPH_GENES = [
   'verticality', 'rigidity', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
   // Cosmetic
   'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
+  'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
   // Roots
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -53,6 +55,10 @@ const GENE_SLIDER_ID = {
   leafDensity:      'leafDensitySlider',
   jitter:           'jitterSlider',
   leafWidth:        'leafWidthSlider',
+  leafLength:       'leafLengthSlider',
+  leafTip:          'leafTipSlider',
+  leafSerration:    'leafSerrationSlider',
+  leafLobing:       'leafLobingSlider',
   // Roots
   rootCount:        'rootCountSlider',
   rootDepth:        'rootDepthSlider',
@@ -295,62 +301,29 @@ document.getElementById('rerollSeedBtn').addEventListener('click', () => {
 });
 
 // =============================================================================
-// INITIAL GENERATION — load a fixed tree default so the page always opens on
-// a proper deciduous tree (low succulence → bark trunk, lush canopy).
-// The "Generate" button still rolls a climate-adapted random genome.
+// PRESET PICKER WIRING
 // =============================================================================
 
-// TREE_DEFAULT — produces a solid trunk + rounded, densely-branched crown on page load.
-//
-// Key tuning goals (see task brief):
-//   TRUNK:  trunkHeight=2.0 (in skeleton.js) + segmentation=0.35 → 6–7 trunk segments.
-//           The tree has a clear, tall trunk before canopy begins.
-//   DENSE:  branchFactorN=0.65 → ~2.95 children per node (3 forks per node fills the
-//           crown volume rather than producing a few long sparse arms).
-//           Shorter internode chains (2–3 segs, skeleton.js) mean forks happen sooner.
-//   ROUND:  branchAngle=0.60 (+ LATERAL_SPREAD_BOOST=0.15 for level≥1) → branches
-//           spread at ~0.75 rad (~43°) — wide enough to fill laterally but not so
-//           wide they splay into a flat fan. Produces a rounded dome silhouette.
-//   COMPACT: BASE_BRANCH_LENGTH=1.0 (skeleton.js) + lengthRatio=0.70 → primaries
-//            reach ~2× trunk height; each successive level is 30% shorter so the
-//            crown fills densely rather than producing whippy far-reaching arms.
-//   FOLIAGE: appendageDensity=0.90 → dense leaf clusters on twig tips.
-//
-// tillering=0 → exactly one trunk (no basal tillering for a tree).
-const TREE_DEFAULT = {
-  branchiness:      0.92,  // fractDepth=6.44 → maxDepth=6 (fine twigs at levels 5-6)
-  branchFactorN:    0.65,  // ~2.95 children per node → crown fills broadly at every level
-  tillering:        0.00,  // pinned to 0: exactly one trunk for a tree
-  radialOrder:      0.55,
-  appendageBreadth: 0.45,
-  appendageDensity: 0.90,  // dense foliage on twig tips
-  segmentation:     0.35,  // ~6 trunk segments → tall clear trunk
-  succulence:       0.12,
-  stemGirth:        0.68,
-  taper:            0.72,
-  rigidity:         0.40,
-  verticality:      0.50,
-  ribbing:          0.00,
-  spininess:        0.00,
-  branchAngle:      0.60,  // moderate spread → rounded crown, not flat fan
-  lengthRatio:      0.70,  // faster taper → compact proportionate crown, not whippy
-  apicalBias:       0.75,  // strong apical dominance keeps clear trunk leader
-  droopBias:        0.10,
-  pigment:          0.33,  // hue≈120° on the full-hue wheel → leaf green
-  leafSize:         1.00,
-  leafDensity:      1.10,
-  jitter:           1.00,
-  leafWidth:        0.50,  // 0.5 = no width change (widthMul=1.0)
-  structuralSeed:   1337,
-  // Root system defaults for the tree specimen
-  rootCount:        0.50,  // ~4 major laterals — good oak/beech spread
-  rootDepth:        0.40,  // moderate taproot
-  rootSpread:       0.55,  // medium radial reach
-  rootFlare:        0.35,  // visible but subtle trunk flare
-  rootButtress:     0.10,  // minimal buttressing
-  rootBranchiness:  0.45,  // moderate sub-root branching
-  rootTaper:        0.50,  // neutral taper
-};
+(function wirePresetPicker() {
+  const sel = document.getElementById('presetSelect');
+  if (!sel) return;
+
+  sel.addEventListener('change', () => {
+    const preset = PRESETS.find(p => p.id === sel.value);
+    if (!preset) return;
+    // Clone the preset genome so slider edits don't mutate the shared preset object.
+    genome = { ...preset.genome };
+    syncSlidersFromGenome(genome);
+    renderCurrent();
+  });
+})();
+
+// =============================================================================
+// INITIAL GENERATION — load a fixed tree default so the page always opens on
+// a proper deciduous tree (low succulence → bark trunk, lush canopy).
+// TREE_DEFAULT is imported from src/presets.js; the 'tree' preset is identical.
+// The "Generate" button still rolls a climate-adapted random genome.
+// =============================================================================
 
 // Load tree default: set genome, push all sliders to match, then resolve + render.
 genome = { ...TREE_DEFAULT };

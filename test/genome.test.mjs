@@ -775,3 +775,119 @@ describe('randomGenome — leafWidth gene', () => {
   });
 
 });
+
+// ---------------------------------------------------------------------------
+// Suite 11: new leaf-shape genes
+// ---------------------------------------------------------------------------
+
+describe('randomGenome — new leaf-shape genes (draws 32-35)', () => {
+
+  it('leafLength, leafTip, leafSerration, leafLobing are present in every output', () => {
+    for (const seed of [0, 1, 42, 1337]) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+        assert.ok(Object.prototype.hasOwnProperty.call(g, gene),
+          `seed ${seed}: ${gene} missing from genome`);
+      }
+    }
+  });
+
+  it('all 4 new genes are in [0,1] for 50 seeds', () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+        assert.ok(g[gene] >= 0 && g[gene] <= 1,
+          `seed ${seed}: ${gene}=${g[gene]} out of [0,1]`);
+      }
+    }
+  });
+
+  it('new draws do NOT shift existing draws — boneAData byte-identical', () => {
+    const seed = 42;
+    const g = randomGenome(NEUTRAL_ENV, seed);
+    const { leafLength: _a, leafTip: _b, leafSerration: _c, leafLobing: _d, ...gWithout } = g;
+    gWithout.structuralSeed = g.structuralSeed;
+    const r1 = resolve(g, NEUTRAL_ENV);
+    const r2 = resolve(gWithout, NEUTRAL_ENV);
+    assert.deepEqual(r1.boneAData, r2.boneAData, 'new leaf draws shifted boneAData');
+    assert.deepEqual(r1.boneBData, r2.boneBData, 'new leaf draws shifted boneBData');
+  });
+
+  it('all 4 new genes in resolve() output', () => {
+    const g = randomGenome(NEUTRAL_ENV, 7);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.leafLength,    g.leafLength);
+    assert.equal(r.leafTip,       g.leafTip);
+    assert.equal(r.leafSerration, g.leafSerration);
+    assert.equal(r.leafLobing,    g.leafLobing);
+  });
+
+  it('new genes vary across seeds (not constant)', () => {
+    for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+      const values = new Set();
+      for (let seed = 0; seed < 30; seed++) {
+        values.add(randomGenome(NEUTRAL_ENV, seed)[gene]);
+      }
+      assert.ok(values.size > 1, `${gene} should vary across seeds`);
+    }
+  });
+
+});
+
+// ---------------------------------------------------------------------------
+// Suite 11: new leaf-shape genes (draws 32-35)
+// ---------------------------------------------------------------------------
+
+describe('randomGenome — new leaf-shape genes (draws 32-35)', () => {
+
+  it('leafLength, leafTip, leafSerration, leafLobing are present in every output', () => {
+    for (const seed of [0, 1, 42, 1337]) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+        assert.ok(Object.prototype.hasOwnProperty.call(g, gene),
+          `seed ${seed}: ${gene} missing from genome`);
+      }
+    }
+  });
+
+  it('all 4 new genes are in [0,1] for 50 seeds', () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+        assert.ok(g[gene] >= 0 && g[gene] <= 1,
+          `seed ${seed}: ${gene}=${g[gene]} out of [0,1]`);
+      }
+    }
+  });
+
+  it('new draws do NOT shift existing draws — boneAData byte-identical', () => {
+    const seed = 42;
+    const g = randomGenome(NEUTRAL_ENV, seed);
+    const { leafLength: _a, leafTip: _b, leafSerration: _c, leafLobing: _d, ...gWithout } = g;
+    gWithout.structuralSeed = g.structuralSeed;
+    const r1 = resolve(g, NEUTRAL_ENV);
+    const r2 = resolve(gWithout, NEUTRAL_ENV);
+    assert.deepEqual(r1.boneAData, r2.boneAData, 'new leaf draws shifted boneAData');
+    assert.deepEqual(r1.boneBData, r2.boneBData, 'new leaf draws shifted boneBData');
+  });
+
+  it('all 4 new genes in resolve() output', () => {
+    const g = randomGenome(NEUTRAL_ENV, 7);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.leafLength,    g.leafLength);
+    assert.equal(r.leafTip,       g.leafTip);
+    assert.equal(r.leafSerration, g.leafSerration);
+    assert.equal(r.leafLobing,    g.leafLobing);
+  });
+
+  it('new genes vary across seeds (not constant)', () => {
+    for (const gene of ['leafLength', 'leafTip', 'leafSerration', 'leafLobing']) {
+      const values = new Set();
+      for (let seed = 0; seed < 30; seed++) {
+        values.add(randomGenome(NEUTRAL_ENV, seed)[gene]);
+      }
+      assert.ok(values.size > 1, `${gene} should vary across seeds`);
+    }
+  });
+
+});
