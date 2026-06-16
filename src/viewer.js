@@ -186,6 +186,12 @@ export function createViewer(canvas) {
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Stats: composer.render() issues several render() calls per frame (shadow
+  // pass, scene, bloom, SMAA, output). With autoReset=true, renderer.info would
+  // reset on each and end up reflecting only the final fullscreen pass (1 tri,
+  // 1 call). Disable autoReset and reset once per frame so info.render
+  // accumulates the real per-frame totals (scene + shadows + post passes).
+  renderer.info.autoReset = false;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight);
 
@@ -584,6 +590,9 @@ export function createViewer(canvas) {
     perspCam.lookAt(target);
     perspCam.updateMatrixWorld();
 
+    // Reset render counters once per frame (autoReset is off) so getStats sees
+    // the accumulated totals across all of composer's passes, not just the last.
+    renderer.info.reset();
     // Composer drives rendering: RenderPass → bloom → SMAA → OutputPass (sRGB+ACES).
     composer.render();
   }
@@ -862,7 +871,7 @@ export function createViewer(canvas) {
      *   drawCalls:    number,
      *   leafClusters: number,
      *   bones:        number,
-     *   resolution:   [number, number],
+     *   resolution:   { width: number, height: number },
      * }}
      */
     getStats() {
@@ -872,7 +881,9 @@ export function createViewer(canvas) {
         drawCalls:    renderer.info.render.calls,
         leafClusters: leaves.mesh.count,
         bones:        currentBoneCount,
-        resolution:   [renderer.domElement.width, renderer.domElement.height],
+        // Drawing-buffer pixel size. Returned as {width,height} (not an array)
+        // to match the stats panel reader (main.js reads r.width/r.height).
+        resolution:   { width: renderer.domElement.width, height: renderer.domElement.height },
       };
     },
 
