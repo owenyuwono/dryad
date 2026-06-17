@@ -79,6 +79,7 @@ function isSchemaValid(genome, schema) {
 const EXPECTED_STRUCTURAL = [
   'branchiness', 'branchFactorN', 'tillering', 'radialOrder',
   'appendageBreadth', 'appendageDensity', 'segmentation',
+  'trunkHeight',
   // Root system genes (added Task 1)
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -134,6 +135,7 @@ const EXPECTED_RANGES = {
   barkColor:        [0.0, 1.0],
   barkPattern:      [0.0, 1.0],
   weep:             [0.0, 1.0],
+  trunkHeight:      [0, 1],
   // Root system genes (added Task 1)
   rootCount:        [0, 1],
   rootDepth:        [0, 1],
@@ -293,6 +295,7 @@ describe('clampField — per-gene clamping', () => {
   const UNIT_GENES = [
     'branchiness', 'branchFactorN', 'tillering', 'radialOrder',
     'appendageBreadth', 'appendageDensity', 'segmentation',
+    'trunkHeight',
     'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
     'ribbing', 'spininess', 'apicalBias', 'pigment', 'leafWidth',
     'leafLength', 'leafTip', 'leafSerration', 'leafLobing',

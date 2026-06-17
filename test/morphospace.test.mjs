@@ -75,6 +75,8 @@ const NEUTRAL_FILL = Object.freeze({
   barkColor:    0.85,
   barkPattern:  0.80,
   weep:         0.00,
+  // trunkHeight=0.5 is the identity (1.0× scale); goldens stay valid.
+  trunkHeight:  0.50,
   // taper is in FLORA_SCHEMA but NOT in the per-form table; fill with neutral
   taper:        0.50,
 });

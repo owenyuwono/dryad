@@ -537,6 +537,53 @@ test('skeleton emits ZERO isRoot nodes (root system is out-of-band via roots.js)
 });
 
 // ---------------------------------------------------------------------------
+// TRUNK HEIGHT GENE — identity-at-0.5, monotonic, deterministic
+// ---------------------------------------------------------------------------
+
+test('TRUNK HEIGHT: trunkHeight=0.5 produces byte-identical skeleton to genome with trunkHeight absent', () => {
+  // trunkHeightFactor at 0.5 must be exactly 1.0, so the skeleton output is
+  // bit-identical to building with the default destructuring value.
+  for (let seed = 0; seed < 10; seed++) {
+    const gWith05    = makeGenome({ trunkHeight: 0.5 });
+    const gAbsent    = makeGenome(); // no trunkHeight → defaults to 0.5 in buildSkeleton
+    const r1 = buildSkeleton(gWith05, mulberry32(seed));
+    const r2 = buildSkeleton(gAbsent, mulberry32(seed));
+    assert.deepStrictEqual(r1, r2, `seed=${seed}: trunkHeight=0.5 should be byte-identical to default`);
+  }
+});
+
+test('TRUNK HEIGHT: higher trunkHeight → taller maximum node Y (monotonic)', () => {
+  // Compare maxY of canopy at trunkHeight=0.2 vs 0.5 vs 0.8.
+  // Each step should produce a strictly taller tree.
+  const seed = 7;
+  const values = [0.1, 0.3, 0.5, 0.7, 0.9];
+  let prevMaxY = null;
+  for (const th of values) {
+    const g = makeGenome({ trunkHeight: th, branchiness: 0.5 });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+    const maxY = Math.max(...nodes.map(n => n.pos[1]));
+    if (prevMaxY !== null) {
+      assert.ok(
+        maxY > prevMaxY,
+        `trunkHeight=${th}: maxY=${maxY.toFixed(4)} should exceed previous maxY=${prevMaxY.toFixed(4)}`
+      );
+    }
+    prevMaxY = maxY;
+  }
+});
+
+test('TRUNK HEIGHT: determinism — same trunkHeight+seed produces identical skeleton', () => {
+  for (const th of [0.0, 0.18, 0.5, 0.65, 1.0]) {
+    for (let seed = 0; seed < 5; seed++) {
+      const g = makeGenome({ trunkHeight: th });
+      const r1 = buildSkeleton(g, mulberry32(seed));
+      const r2 = buildSkeleton(g, mulberry32(seed));
+      assert.deepStrictEqual(r1, r2, `trunkHeight=${th} seed=${seed}: skeleton not deterministic`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // WEEP GENE — skeleton-level no-op guarantee
 // ---------------------------------------------------------------------------
 

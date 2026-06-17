@@ -64,6 +64,8 @@ export const TREE_DEFAULT = {
   barkColor:        1.00,  // brown bark (1.0 = furrowed-brown identity)
   barkPattern:      1.00,  // deep furrows (identity)
   weep:             0.00,  // no pendulous droop
+  // trunkHeight (draw 39) — 0.50 = identity (1.0× factor)
+  trunkHeight:      0.50,
 };
 
 // ---------------------------------------------------------------------------
@@ -100,6 +102,7 @@ export const PRESETS = [
       leafTip:          0.60,  // slightly rounded tip
       leafSize:         1.10,
       pigment:          0.35,  // rich leaf green
+      trunkHeight:      0.50,  // identity — same stature as tree default
       structuralSeed:   0xA1B2C3D4 >>> 0,
     },
   },
@@ -111,7 +114,7 @@ export const PRESETS = [
     label:  'Birch',
     genome: {
       ...TREE_DEFAULT,
-      branchiness:      0.45,
+      branchiness:      0.55,  // bumped from 0.45 → fuller canopy, more branch levels
       branchFactorN:    0.50,
       tillering:        0.00,
       verticality:      0.70,  // upright, columnar
@@ -121,6 +124,7 @@ export const PRESETS = [
       rigidity:         0.35,  // flexible, droopy fine branches
       branchAngle:      0.55,
       apicalBias:       0.65,  // moderate apical — columnar but still branching
+      leafDensity:      1.45,  // bumped from default → full canopy, not sparse
       leafSize:         0.85,  // small leaves
       leafSerration:    0.50,  // distinctly serrated
       leafWidth:        0.45,  // medium-narrow
@@ -130,6 +134,7 @@ export const PRESETS = [
       pigment:          0.30,
       barkColor:        0.05,  // pale white/cream — classic birch bark
       barkPattern:      0.10,  // smooth with lenticels, not furrowed
+      trunkHeight:      0.55,  // slightly taller than identity — slender upright form
       structuralSeed:   0x7F3A1E05 >>> 0,
     },
   },
@@ -159,6 +164,7 @@ export const PRESETS = [
       rootCount:        0.55,
       rootSpread:       0.65,  // wide root plate for a multi-stem shrub
       rootFlare:        0.20,  // minimal flare on thin stems
+      trunkHeight:      0.18,  // KEY headline fix: short bush (~0.45× identity = squat form)
       structuralSeed:   0x2C8F4B91 >>> 0,
     },
   },
@@ -191,6 +197,7 @@ export const PRESETS = [
       rootCount:        0.50,
       rootSpread:       0.60,
       weep:             0.90,  // KEY: strong pendulous weep gene
+      trunkHeight:      0.65,  // tall willow — keeps weep 0.90 (other engineer strengthens actual droop)
       structuralSeed:   0xE5D2A0F7 >>> 0,
     },
   },

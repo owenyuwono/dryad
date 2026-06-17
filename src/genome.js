@@ -191,6 +191,8 @@ const NEUTRAL = Object.freeze({
   barkColor:        1.00,
   barkPattern:      1.00,
   weep:             0.00,
+  // trunkHeight (draw 39) — 0.5 = identity (1.0× scale factor, byte-identical to pre-gene)
+  trunkHeight:      0.50,
   // Root system (draws 24–30)
   rootCount:        0.45,
   rootDepth:        0.45,
@@ -270,6 +272,8 @@ function computeEnvOffset(env) {
     barkColor:        0,
     barkPattern:      0,
     weep:             medium === 'water' ? 0.05 : 0,
+    // trunkHeight offset (0 at all envs — stature is seed-driven, not env-driven)
+    trunkHeight:      0,
   };
 
   // --- aridity + temperature → dry/hot = cactus region ---
@@ -429,6 +433,11 @@ export function randomGenome(env, seed) {
   const barkPattern = gene('barkPattern', STD);           // draw 37
   const weep        = gene('weep',        STD);           // draw 38
 
+  // --- trunkHeight gene (draw 39) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 38 (weep). Draws 01–38 are untouched.
+  // At neutral (0.5) the skeleton scale factor is exactly 1.0 → byte-identical output.
+  const trunkHeight = gene('trunkHeight', STD);           // draw 39
+
   return {
     // Structural
     branchiness,
@@ -463,6 +472,7 @@ export function randomGenome(env, seed) {
     barkColor,
     barkPattern,
     weep,
+    trunkHeight,
     structuralSeed,
     // Root system
     rootCount,

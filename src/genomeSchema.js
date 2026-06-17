@@ -95,6 +95,17 @@ export const FLORA_SCHEMA = Object.freeze({
     range: Object.freeze([0, 1]),
   }),
 
+  /**
+   * Overall plant vertical stature: 0 = short bush (~0.45×), 0.5 = identity (1.0×), 1 = tall (~1.7×).
+   * Applied in skeleton.js as a scale on BASE_BRANCH_LENGTH and TRUNK_HEIGHT.
+   * NEUTRAL 0.50 → factor exactly 1.0 → byte-identical output to pre-gene skeleton. Draw 39.
+   */
+  trunkHeight: Object.freeze({
+    tier: 'structural',
+    kind: 'continuous',
+    range: Object.freeze([0, 1]),
+  }),
+
   // -------------------------------------------------------------------------
   // PROPORTIONS TIER — shape
   // -------------------------------------------------------------------------

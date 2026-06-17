@@ -68,6 +68,8 @@ function makeFloraParent() {
     barkColor:        0.85,
     barkPattern:      0.80,
     weep:             0.00,
+    // trunkHeight (draw 39)
+    trunkHeight:      0.50,
     structuralSeed:   0xDEADBEEF,
     // root system tier (added Task 1 — required so genomeDistance is non-NaN)
     rootCount:        0.45,

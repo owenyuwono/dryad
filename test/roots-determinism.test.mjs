@@ -78,6 +78,8 @@ function makeGenome(overrides = {}) {
     barkColor:        0.85,
     barkPattern:      0.80,
     weep:             0.00,
+    // trunkHeight=0.5 is the identity (1.0× factor); golden canopy positions stay valid
+    trunkHeight:      0.50,
     ...overrides,
   };
 }
@@ -297,7 +299,7 @@ const BUDGET_GENOMES = [
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
-    barkColor: 0.85, barkPattern: 0.80, weep: 0.00,
+    barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
   },
   // Genome 1: radialOrder=0.5, apicalBias=0.3
   {
@@ -310,7 +312,7 @@ const BUDGET_GENOMES = [
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
-    barkColor: 0.85, barkPattern: 0.80, weep: 0.00,
+    barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
   },
   // Genome 2: radialOrder=1.0, apicalBias=0.8
   {
@@ -323,7 +325,7 @@ const BUDGET_GENOMES = [
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
-    barkColor: 0.85, barkPattern: 0.80, weep: 0.00,
+    barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
   },
 ];
 

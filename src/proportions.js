@@ -892,7 +892,15 @@ export function solveProportions(graph, envelope, genome = null) {
   const weep = (genome !== null && genome.weep !== undefined) ? (genome.weep ?? 0) : 0;
 
   if (weep > 0) {
-    const WEEP_MAX_PER_LEVEL = 0.35; // radians of weep arc per branchLevel at weep=1
+    const WEEP_MAX_PER_LEVEL = 0.50; // radians of weep arc per branchLevel at weep=1
+
+    // Pendulous strand length scale: terminal/distal segments grow longer under
+    // high weep so the hanging strands have the characteristic willow length.
+    // At weep=0: factor=1.0 (no-op). At weep=1: terminal segments are scaled up
+    // to WEEP_STRAND_SCALE_MAX times their original length.
+    // Only applied at branchLevel >= WEEP_STRAND_MIN_LEVEL (distal/terminal twigs).
+    const WEEP_STRAND_SCALE_MAX = 1.8;
+    const WEEP_STRAND_MIN_LEVEL = 2;   // only lengthen distal branches, not primaries
 
     // Forward pass: parentIdx < ownIndex guarantees parents are already adjusted
     // before we process each child.
@@ -936,7 +944,19 @@ export function solveProportions(graph, envelope, genome = null) {
       if (kWeepLen < 1e-10) continue; // already parallel to downDir, skip
 
       kWeep = vecScale(kWeep, 1 / kWeepLen);
-      const bentOffset = rotateAroundAxis(rawOffset, kWeep, weepAngle);
+      let bentOffset = rotateAroundAxis(rawOffset, kWeep, weepAngle);
+
+      // Pendulous strand elongation: scale terminal twig segments longer under
+      // high weep so they read as long hanging strands rather than short stubs.
+      // Applied AFTER rotation so the stretch is along the already-drooped direction.
+      // weep=0 → strandScale=1.0 (no-op). weep=1 → strandScale=WEEP_STRAND_SCALE_MAX.
+      // Only for terminal segments at branchLevel >= WEEP_STRAND_MIN_LEVEL —
+      // interior woody nodes are excluded so the cascade-accumulation invariant holds
+      // (each level drops strictly more than the level above it in absolute Y terms).
+      if (n.isTerminal === true && level >= WEEP_STRAND_MIN_LEVEL) {
+        const strandScale = 1.0 + weep * (WEEP_STRAND_SCALE_MAX - 1.0);
+        bentOffset = vecScale(bentOffset, strandScale);
+      }
 
       n.pos[0] = anchorPos[0] + bentOffset[0];
       n.pos[1] = anchorPos[1] + bentOffset[1];

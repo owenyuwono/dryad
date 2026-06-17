@@ -77,7 +77,7 @@
 //   Root system: out-of-band via roots.js (post-pass in resolve()); skeleton emits ZERO isRoot nodes.
 //   BFS soft ceiling: MAX_BONES - 20 bones (boneCounter tracks trunk bones only; roots use a separate ROOT_BONE_BUDGET)
 //   No final hard-clamp: bones array is returned at its true length.
-//   Exported MAX_BONES = 400 — the absolute upper bound; callers may reference it.
+//   Exported MAX_BONES = 900 — the absolute upper bound; callers may reference it.
 //
 // BRANCH CURVATURE — DESIGN NOTES:
 //   Each internode chain curves its direction progressively as segments are placed.
@@ -389,8 +389,20 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
     apicalBias     = 0.5,   // [0,1]
     // droopBias passed through to proportions stage, not used here
     jitter         = 0.5,   // [0,1] — base jitter amplitude
-    structuralSeed = 0.0    // [0,1] — deterministic curvature seed; no rng draws consumed
+    structuralSeed = 0.0,   // [0,1] — deterministic curvature seed; no rng draws consumed
+    trunkHeight    = 0.5,   // [0,1] — overall vertical stature; 0.5 = identity (1.0× factor)
   } = genome;
+
+  // ---------------------------------------------------------------------------
+  // trunkHeightFactor: piecewise linear mapping so f(0.5) = exactly 1.0 (identity).
+  //   [0,   0.5]: f(t) = 0.45 + t * 1.10  → f(0)=0.45, f(0.5)=1.00
+  //   [0.5, 1.0]: f(t) = 1.00 + (t-0.5)*1.40 → f(0.5)=1.00, f(1)=1.70
+  // Multiplied onto both TRUNK_HEIGHT and BASE_BRANCH_LENGTH so the whole plant
+  // scales uniformly in height. No rng draws consumed; no genome draw shifted.
+  // ---------------------------------------------------------------------------
+  const trunkHeightFactor = trunkHeight <= 0.5
+    ? 0.45 + trunkHeight * 1.10
+    : 1.00 + (trunkHeight - 0.5) * 1.40;
 
   // -------------------------------------------------------------------------
   // Derive integer structural parameters from continuous genes.
@@ -470,8 +482,8 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
     const trunkNodeIndices = [];
     for (let i = 0; i < trunkSegmentsCount; i++) {
       const t = trunkSegmentsCount > 1 ? i / (trunkSegmentsCount - 1) : 0;
-      // Scale the full trunk height (TRUNK_HEIGHT) by weight so crossfade trunks are stubs.
-      const trunkHeight = TRUNK_HEIGHT * weight;
+      // Scale the full trunk height by both weight (crossfade) and trunkHeightFactor (gene).
+      const trunkHeight = TRUNK_HEIGHT * trunkHeightFactor * weight;
       // trunkBend/trunkLean arc for overall organism lean (same for all stems).
       const bendArc = trunkBend * Math.sin(t * Math.PI) * weight;
       const leanArc = trunkLean * Math.sin(t * Math.PI) * weight;
@@ -622,7 +634,7 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       // BASE_BRANCH_LENGTH × TRUNK_HEIGHT gives the primary branch reach.
       // At each successive depth level this is multiplied by lengthRatio so
       // branches taper naturally inward toward the fine twigs.
-      len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT,
+      len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor,
       attachPos: [...nodes[topIdx].pos],
       radiusScale: weight,
       childIndex: 0   // deterministic curvature key: which child of its parent is this?

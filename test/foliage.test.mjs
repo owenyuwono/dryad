@@ -1221,3 +1221,131 @@ test('generateFoliage yields zero clusters sourced on isRoot nodes (foliage excl
   // And verify foliage produced at least some clusters (canopy still works)
   assert.ok(foliage.count > 0, 'foliage should produce at least some clusters from the canopy');
 });
+
+// ---------------------------------------------------------------------------
+// WEEP LEAF-HANG TESTS
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// TEST: weep=0 leaf-hang no-op — SoA output is byte-identical to weep-absent genome.
+// ---------------------------------------------------------------------------
+
+test('LEAF-HANG no-op: weep=0 SoA is byte-identical to genome without weep field', () => {
+  const genomeNoWeep = makeBushyGenome();              // no weep field
+  const genomeWeep0  = makeBushyGenome({ weep: 0 });  // explicit weep=0
+
+  const graphNoWeep = buildGraph(genomeNoWeep);
+  const graphWeep0  = buildGraph(genomeWeep0);
+
+  const r1 = generateFoliage(graphNoWeep, genomeNoWeep);
+  const r2 = generateFoliage(graphWeep0,  genomeWeep0);
+
+  assert.strictEqual(r1.count, r2.count, 'weep=0 must not change count');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure']) {
+    for (let i = 0; i < r1.count * (key === 'position' || key === 'normal' || key === 'tangent' ? 3 : 1); i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `weep=0 no-op: ${key}[${i}] differs from no-weep baseline`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: leaf-hang effect — high weep tilts leaves downward (more negative tangent Y).
+// ---------------------------------------------------------------------------
+
+test('LEAF-HANG: high weep makes leaf tangent Y more negative (leaves tilt down)', () => {
+  // At weep=0 leaves orient upward/outward (phototropism + upward lean).
+  // At weep=1 the tangent is blended toward [0,-1,0] so mean tangent Y should be
+  // substantially more negative (leaves hang down like a willow).
+  const genomeWeep0 = makeBushyGenome({ weep: 0 });
+  const genomeWeep1 = makeBushyGenome({ weep: 1.0 });
+
+  // Both genomes share the same structuralSeed so the skeleton is identical.
+  const graphWeep0 = buildGraph(genomeWeep0);
+  const graphWeep1 = buildGraph(genomeWeep1);
+
+  const r0 = generateFoliage(graphWeep0, genomeWeep0);
+  const r1 = generateFoliage(graphWeep1, genomeWeep1);
+
+  assert.ok(r0.count > 0 && r1.count > 0, 'need at least one cluster for comparison');
+
+  // Mean tangent Y across all valid clusters
+  function meanTangentY(result) {
+    let sum = 0;
+    for (let i = 0; i < result.count; i++) {
+      sum += result.tangent[i * 3 + 1]; // Y component of tangent
+    }
+    return sum / result.count;
+  }
+
+  const meanY0 = meanTangentY(r0);
+  const meanY1 = meanTangentY(r1);
+
+  assert.ok(
+    meanY1 < meanY0,
+    `high weep (${meanY1.toFixed(4)}) should have more negative mean tangent Y than weep=0 (${meanY0.toFixed(4)})`
+  );
+
+  // At weep=1 the tangent is fully blended toward [0,-1,0] then renormalized.
+  // Starting from a mostly-upward tangent, weep=1 should push mean tangent Y below 0.
+  assert.ok(
+    meanY1 < 0,
+    `weep=1 mean tangent Y (${meanY1.toFixed(4)}) should be negative (leaves hanging down)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: leaf-hang rng draw count unchanged — weep blending uses no extra rng draws.
+//
+// The proof: run generateFoliage on the SAME graph with weep=0 and weep=1.
+// The graph is solved with weep=0 (so all node positions are identical for both
+// calls). The foliage rng stream is seeded from structuralSeed (independent of
+// weep). If the weep blend added any extra rng draws, the per-cluster scale and
+// rotation values (which are downstream of the tangent computation in writeCluster)
+// would differ between the two calls. They must be byte-identical.
+// ---------------------------------------------------------------------------
+
+test('LEAF-HANG: rng draw count is unchanged by weep (no extra draws at any weep value)', () => {
+  // Build and solve the graph once with weep=0 — same positions for both foliage calls.
+  const baseGenome = makeBushyGenome({ weep: 0 });
+  const graph = buildGraph(baseGenome);
+
+  // Genome with weep=0: baseline
+  const r0 = generateFoliage(graph, { ...baseGenome, weep: 0 });
+
+  // Genome with weep=1: same graph, only the weep gene differs.
+  // The rng is seeded from structuralSeed (unchanged), so the draw sequence is the same length.
+  const r1 = generateFoliage(graph, { ...baseGenome, weep: 1.0 });
+
+  assert.strictEqual(r0.count, r1.count, 'count must be identical (same graph, same density)');
+
+  // scale[i] = sizeJitter draw × ... (1st rng draw per cluster, before tangent/normal).
+  // rotation[i] = clusterRoll draw (last rng draw per cluster, after tangent/normal).
+  // If weep blend consumed an extra rng draw between them, rotation would shift.
+  for (let i = 0; i < r0.count; i++) {
+    assert.strictEqual(
+      r0.scale[i],
+      r1.scale[i],
+      `scale[${i}] differs between weep=0 and weep=1 — rng draw count changed`
+    );
+    assert.strictEqual(
+      r0.rotation[i],
+      r1.rotation[i],
+      `rotation[${i}] differs between weep=0 and weep=1 — rng draw count changed`
+    );
+  }
+
+  // position/ageColor are also written with same rng-derived values (positions derived
+  // from graph geometry, not rng, but ageColor is deterministic from branchLevel).
+  for (let i = 0; i < r0.count * 3; i++) {
+    assert.strictEqual(
+      r0.position[i],
+      r1.position[i],
+      `position[${i}] differs between weep=0 and weep=1 — graph positions should be identical`
+    );
+  }
+});

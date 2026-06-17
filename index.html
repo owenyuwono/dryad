@@ -575,7 +575,11 @@
       <input type="range" id="weepSlider" min="0" max="1" step="0.01" value="0.0"
              data-gene="weep" data-display="weepVal">
 
-      <div class="hint">Droop bias negative → upswept; positive → weeping form. Weep: 0=no-op, 1=strongly pendulous.</div>
+      <label><span class="lname">Trunk height</span><span class="val" id="trunkHeightVal">0.50</span></label>
+      <input type="range" id="trunkHeightSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="trunkHeight" data-display="trunkHeightVal">
+
+      <div class="hint">Droop bias negative → upswept; positive → weeping form. Weep: 0=no-op, 1=strongly pendulous. Trunk height: 0.5=identity, 0=short bush, 1=tall.</div>
     </div>
 
     <!-- ── COSMETIC ───────────────────────────────────── -->

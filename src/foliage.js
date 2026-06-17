@@ -265,6 +265,10 @@ export function generateFoliage(graph, genome, opts) {
   const appendageBreadth = genome.appendageBreadth !== undefined ? genome.appendageBreadth : 0.45;
   const radialOrder      = genome.radialOrder      !== undefined ? genome.radialOrder      : 0.25;
 
+  // weep ∈ [0,1]: 0 = no-op (normal orientation), 1 = leaves hang straight down.
+  // Strict no-op at weep=0 — the blend block below is skipped entirely via guard.
+  const weep = genome.weep !== undefined ? (genome.weep ?? 0) : 0;
+
   // -------------------------------------------------------------------------
   // Separate deterministic RNG stream — NEVER touches the skeleton stream.
   // -------------------------------------------------------------------------
@@ -400,6 +404,18 @@ export function generateFoliage(graph, genome, opts) {
       clusterTangent[1] * (1 - PHOTO_STRENGTH) + UP[1] * PHOTO_STRENGTH,
       clusterTangent[2] * (1 - PHOTO_STRENGTH) + UP[2] * PHOTO_STRENGTH,
     ]);
+
+    // LEAF-HANG: blend tangent toward gravity (downward) proportional to weep.
+    // At weep=0 this block is unreachable (outer guard `weep > 0` is never true),
+    // so the SoA output is byte-identical to the pre-weep baseline. No rng draws.
+    if (weep > 0) {
+      const DOWN = [0, -1, 0];
+      clusterTangent = norm3([
+        clusterTangent[0] * (1 - weep) + DOWN[0] * weep,
+        clusterTangent[1] * (1 - weep) + DOWN[1] * weep,
+        clusterTangent[2] * (1 - weep) + DOWN[2] * weep,
+      ]);
+    }
 
     const clusterNormal = norm3(cross3(clusterTangent, radialDir));
     const clusterRoll   = (rng() - 0.5) * 0.8;

@@ -890,3 +890,53 @@ describe('randomGenome — barkColor, barkPattern, weep genes (draws 36-38)', ()
   });
 
 });
+
+// ---------------------------------------------------------------------------
+// Suite 13: trunkHeight gene (draw 39)
+// ---------------------------------------------------------------------------
+
+describe('randomGenome — trunkHeight gene (draw 39)', () => {
+
+  it('trunkHeight is present in every randomGenome output', () => {
+    for (const seed of [0, 1, 42, 1337]) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      assert.ok(Object.prototype.hasOwnProperty.call(g, 'trunkHeight'),
+        `seed ${seed}: trunkHeight missing from genome`);
+    }
+  });
+
+  it('trunkHeight is in [0,1] for 50 seeds', () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const g = randomGenome(NEUTRAL_ENV, seed);
+      assert.ok(g.trunkHeight >= 0 && g.trunkHeight <= 1,
+        `seed ${seed}: trunkHeight=${g.trunkHeight} out of [0,1]`);
+    }
+  });
+
+  it('draw 39 does NOT shift existing draws — at trunkHeight=0.5 skeleton is byte-identical to absent gene', () => {
+    // trunkHeight=0.5 is the identity (scale factor exactly 1.0).
+    // A genome with trunkHeight explicitly set to 0.5 must produce byte-identical
+    // boneAData to a genome with trunkHeight absent (which defaults to 0.5 in
+    // buildSkeleton's destructuring), confirming no draw shift and factor=1.0.
+    const seed = 42;
+    const g = randomGenome(NEUTRAL_ENV, seed);
+    // Override to exactly 0.5 (identity) — the scale factor is exactly 1.0
+    const gIdentity = { ...g, trunkHeight: 0.5 };
+    // Remove trunkHeight entirely — skeleton defaults it to 0.5 via destructuring
+    const { trunkHeight: _th, ...gWithout } = g;
+    gWithout.structuralSeed = g.structuralSeed;
+    const r1 = resolve(gIdentity, NEUTRAL_ENV);
+    const r2 = resolve(gWithout, NEUTRAL_ENV);
+    assert.deepEqual(r1.boneAData, r2.boneAData, 'trunkHeight=0.5 vs absent: boneAData differ (identity broken)');
+    assert.deepEqual(r1.boneBData, r2.boneBData, 'trunkHeight=0.5 vs absent: boneBData differ (identity broken)');
+  });
+
+  it('trunkHeight varies across seeds (is not constant)', () => {
+    const values = new Set();
+    for (let seed = 0; seed < 30; seed++) {
+      values.add(randomGenome(NEUTRAL_ENV, seed).trunkHeight);
+    }
+    assert.ok(values.size > 1, 'trunkHeight should vary across seeds');
+  });
+
+});
