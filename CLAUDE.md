@@ -27,6 +27,8 @@ Note: `node --test test/` (a bare directory) does NOT work in this Node version 
 - **NEVER open a browser / Playwright / chrome-devtools / a dev server to "verify" rendering or UI.** The user runs and verifies the app themselves. All visual/rendering correctness is **USER-VERIFIED** — reason about it from the code instead. (Build + Node tests are fine and expected.)
 - **Determinism is load-bearing.** All generation randomness comes from `mulberry32` (`src/rng.js`). `(envelope, seed)` MUST always produce an identical organism. There is **no `Math.random` in the generation pipeline** (the only `crypto`/random use is the "randomize seed" UI button, which is not generation). When editing a generation stage, do not change the **count or order of `rng()` draws** unless you intend to (it reshuffles every downstream value).
 - **The seed never sets thickness.** Radii/proportions come from physics (`solveProportions`), not from the seed. Topology is seeded; proportions are physics.
+- **Adding a new gene: append its `randomGenome` draw LAST.** Insert the draw strictly AFTER the current final draw so existing seeds' other genes + canopy + foliage stay byte-identical (otherwise every downstream draw reshuffles). A generation-affecting gene (e.g. `weep`, `trunkHeight`) MUST have an IDENTITY default value that is a no-op, so existing trees and the golden-pin canopy tests stay valid. Add the new gene to EVERY hand-built genome test fixture (`genomeSchema`/`genome`/`morphospace`/`mutate`/`presets`/`roots-determinism`) or `genomeDistance`/`resolve` will `NaN`.
+- **`onBeforeCompile` GLSL is NOT caught by CI.** Shader code injected via `material.onBeforeCompile` (`barkMaterial`, `leafMesh`, `windSkinGlsl`) is compiled only at runtime in the browser — `npm run build` and node tests pass even when it's broken, and the mesh then silently VANISHES in-browser. Verify every identifier against the INSTALLED three r160 source under `node_modules/three/src/renderers/shaders/` (chunk order matters — e.g. `normal` only exists from `normal_fragment_begin` onward; r160 removed the `geometry.` struct → use `geometryViewDir`). `texelFetch`/two-arg `atan` are core GLSL ES 3.00 (WebGL2). NO backticks inside `/* glsl */`...`` comment text (closes the JS string). For INSTANCED meshes, a world-space displacement must be applied POST-`instanceMatrix` (a `project_vertex` hook), never added to the pre-instance `transformed`.
 
 ## Architecture: the two pipelines
 
@@ -68,7 +70,7 @@ Key data structures:
 
 ### UI (`index.html` + `main.js`)
 
-Left panel: tabbed gene/climate sliders (Climate / Form / Stem / App / Posture / Look) — Sims-CAS style. `TREE_DEFAULT` (in `main.js`) is the genome loaded on page load so reloading shows a tree. Top-right: stats. Top-left (right of the controls): the render-mode panel. Morphological sliders edit the genome directly; "Generate" rolls a climate-adapted `randomGenome`.
+Left panel: a **Preset** dropdown (header) + tabbed gene/climate sliders (Climate / Form / Stem / App / Posture / Look) — Sims-CAS style. `TREE_DEFAULT` (now in `src/presets.js`) is the genome loaded on page load so reloading shows a tree. Top-right: stats. Top-left (right of the controls): the render-mode panel (lit/unlit/wireframe/normals/ao + reveal-roots + wind toggle). Morphological sliders edit the genome directly; "Generate" rolls a climate-adapted `randomGenome`; the ↻ button rerolls only the seed (new individual, same genes); the preset dropdown loads a gene-vector bookmark.
 
 ## Where the "look" is tuned (named constants)
 
@@ -85,9 +87,27 @@ Most visual tuning is named constants, not logic:
 - **Foliage is mesh cards, off the bone budget.** Leaves can't be SDF (transparency, count). They're an instanced quad mesh with procedural alpha sprites.
 - **Photoreal rendering overhaul.** PBR materials + HDRI IBL + sun shadows + ground + post/AA. Honest ceiling: this targets "convincingly realistic CG", not photo-indistinguishable (that's SpeedTree/ray-traced territory). The realism work is mostly *rendering* (lighting/material/post), separate from the *generation* logic.
 
+## Generative capabilities (genes, presets, wind, roots)
+
+Added on top of the base morphospace; all genes are continuous, in `FLORA_SCHEMA`, drawn at the END of `randomGenome` (see the "append draws LAST" norm).
+
+- **Leaf-shape genes** (cosmetic; drive the Gielis superformula in `leafTexture.js`): `leafWidth` (breadth), `leafLength` (axialStretch), `leafTip` (n1 sharpness), `leafSerration` (margin teeth), `leafLobing` (m → palmate/maple, deep sinuses). Simple ovate at `leafLobing=0`. Shape math is pure + Node-tested (monotonic per-axis assertions).
+- **Bark genes** (cosmetic; drive `barkMaterial` uniforms via `setGenome`): `barkColor` (1=brown furrowed identity → 0=white/cream **birch**), `barkPattern` (1=furrowed → 0=smooth + horizontal **lenticels**). **1.0/1.0 = the prior brown-furrowed identity** (don't regress non-birch trees).
+- **`weep`** (proportions): willow cascade droop, a post-pass at the end of `solveProportions`. **0 = strict no-op.** ⚠️ KNOWN BUG: the current per-level rotation *accumulates* and spirals/over-droops on deep canopies (tips to y≈−42); needs a bounded blend-toward-down rewrite. Willow preset kept shallow until fixed.
+- **`trunkHeight`** (structural): overall vertical stature, scaled in `skeleton.js`. **0.5 = identity (1.0×)**, 0≈0.45× (short bush), 1≈1.7× (tall).
+- **`pigment`** is now a FULL HSL hue wheel (any leaf color) — `colorRamp.js` `pigmentToColor` maps hue=pigment at fixed S/L; the old green→brown ramp is gone.
+
+**Presets** — `src/presets.js`: named gene-vector "bookmarks" `{ id, label, genome:{...TREE_DEFAULT, ...overrides, structuralSeed} }`. **Pure parameters, ZERO custom logic** — selecting one (dropdown in the header) loads the vector → syncs sliders → same `resolve()`. `TREE_DEFAULT` now lives HERE (moved out of `main.js`). A preset only looks right if the morphospace can express it.
+
+**Hierarchical skeletal wind** (render-only vertex displacement): each branch chain is a "wind bone". `branchMesh` bakes per-vertex `boneIndex`/`boneFraction` + a `bones_wind` hierarchy; `windSolver.js` composes per-bone rotation matrices top-down each frame into a `DataTexture`; `windSkinGlsl.js` is the shared bone-skinning GLSL injected into `barkMaterial` (branch) + `leafMesh` (leaf bone-follow + flutter/tumble); `viewer.js` builds/uploads the texture, runs the solver in the render loop, and owns the Wind toggle/strength. `windStrength=0` = exactly static. (`windGlsl.js` is the older global-field wind, retained but superseded.)
+
+**Roots** (now ACTIVE): `roots.js` `growRootSystem(graph, genome, rootRng)` — taproot + lateral network + buttress, appended in `resolve()` AFTER `buildSkeleton` using an ISOLATED `mulberry32(structuralSeed ^ ROOT_SALT)` sub-stream so roots never perturb canopy/foliage determinism. Roots dive below y=0; a ground-reveal toggle (`viewer`/`ground`) fades the ground to inspect them.
+
+**Other UI**: a reroll-seed button (changes only `structuralSeed` → a new individual of the same genes); the stats panel triangle/draw-call counts are real per-frame totals (`renderer.info.autoReset=false` + `reset()` each frame; the number includes the shadow + post passes).
+
 ## Active vs. parked
 
-**Active** (single-specimen tree, the current focus): `genome`, `genomeSchema`, `archetype`, `skeleton`, `proportions`, `foliage`, `colorRamp`, `rng`, `envelope`, `branchMesh`, `barkMaterial`, `leafMesh`, `leafTexture`, `environment`, `ground`, `renderModes`, `viewer`, `main` + `index.html`.
+**Active** (single-specimen tree, the current focus): `genome`, `genomeSchema`, `archetype`, `skeleton`, `proportions`, `foliage`, `roots`, `colorRamp`, `rng`, `envelope`, `branchMesh`, `barkMaterial`, `leafMesh`, `leafTexture`, `windSolver`, `windSkinGlsl`, `windGlsl`, `presets`, `environment`, `ground`, `renderModes`, `viewer`, `main` + `index.html`.
 
 **Parked** (on disk, intentionally NOT in the active path — the future "planet-wide ecology" / earlier explorations):
 - `biosphere.js` (`generateBiosphere` — rolls one ancestral genome and branch-mutates it into a related FAMILY of N species), `mutate.js` (schema-driven, genome-type-agnostic mutation with tier rates), `dendrogram.js` (phylogeny tree view), `gridRenderer.js` (multi-species gallery; still uses the SDF shaders). This whole layer is intact and tested — it's how an ecology of related plants would be generated.
