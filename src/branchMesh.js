@@ -192,6 +192,62 @@ function defaultRadialSegs(level) {
 }
 
 // ---------------------------------------------------------------------------
+// ringProfile — pure, exported, unit-testable cross-section modulator.
+//
+// Returns { rScale, uScale, nU, nV } where:
+//   rScale : radial scale factor (1.0 = no rib modulation)
+//   uScale : u-axis squash factor (1.0 = no flatness)
+//   nU     : analytic in-plane normal component along the u-axis basis vector
+//   nV     : analytic in-plane normal component along the v-axis basis vector
+//
+// The actual ring vertex offset is:
+//   offset = r * rScale * (cosθ · u · uScale + sinθ · v)
+//
+// The outward normal in 3D is:
+//   normal = normalize(nU · u + nV · v)
+//
+// IDENTITY AT ZERO:
+//   At ribbing=0 AND flatness=0:
+//     rScale = 1, uScale = 1
+//     dRscale/dθ = 0
+//     nU = 0*sinθ + 1*cosθ = cosθ
+//     nV = 1*sinθ*1 - 0   = sinθ
+//   → normal = cosθ·u + sinθ·v  (exact radial normal, byte-identical to prior code)
+//
+// DERIVATION:
+//   P(θ) = rScale * (cosθ·uScale, sinθ)  in the (u,v) cross-section plane.
+//   dP/dθ = (dRscale/dθ·cosθ·uScale - rScale·sinθ·uScale,
+//             dRscale/dθ·sinθ        + rScale·cosθ)
+//   Outward normal = tangent rotated −90° (CW) = (T_v, −T_u):
+//     nU =  T_v = dRscale/dθ·sinθ + rScale·cosθ
+//     nV = −T_u = rScale·sinθ·uScale − dRscale/dθ·cosθ·uScale
+// ---------------------------------------------------------------------------
+const RIB_DEPTH = 0.35;  // maximum fractional cut depth of a rib
+const FLAT_MAX  = 0.80;  // maximum fractional squash along u-axis
+
+export function ringProfile(theta, { ribbing = 0, ribCount = 10, flatness = 0 } = {}) {
+  const ct = Math.cos(theta);
+  const st = Math.sin(theta);
+
+  // Radial modulation: flutes cut inward between ribs.
+  const rScale = 1 - ribbing * RIB_DEPTH * 0.5 * (1 + Math.cos(ribCount * theta));
+
+  // u-axis squash.
+  const uScale = 1 - flatness * FLAT_MAX;
+
+  // Derivative of rScale w.r.t. theta:
+  //   d/dθ [1 - ribbing*RIB_DEPTH*0.5*(1 + cos(ribCount*θ))]
+  //   = ribbing * RIB_DEPTH * 0.5 * ribCount * sin(ribCount*θ)
+  const dRscale = ribbing * RIB_DEPTH * 0.5 * ribCount * Math.sin(ribCount * theta);
+
+  // Analytic outward normal (in local (u, v) 2D cross-section coordinates):
+  const nU = dRscale * st + rScale * ct;          // T_v
+  const nV = rScale * st * uScale - dRscale * ct * uScale;  // −T_u
+
+  return { rScale, uScale, nU, nV };
+}
+
+// ---------------------------------------------------------------------------
 // buildBranchGeometry
 // ---------------------------------------------------------------------------
 
@@ -208,6 +264,13 @@ function defaultRadialSegs(level) {
  *   opts.minRadius       {number}  — minimum ring radius in world units (default: 0.004).
  *   opts.radialSegsFor   {function(level):number} — radial segment override.
  *     Default: level 0→16, level 1→10, level 2→7, level ≥3→5.
+ *   opts.ribbing         {number}  — rib/flute depth [0,1] (default: 0 = perfect circle).
+ *   opts.flatness        {number}  — u-axis squash [0,1] (default: 0 = perfect circle).
+ *   opts.ribCount        {number}  — number of ribs around the circumference (default: 10).
+ *     Typically derived from the `segmentation` gene by the caller.
+ *
+ * At opts.ribbing=0 AND opts.flatness=0 (the defaults), output is BYTE-IDENTICAL
+ * to the pre-change code path — the perfect-circle identity is preserved exactly.
  *
  * @returns {{ positions, normals, uvs, ao, indices, vertexCount, triangleCount, bounds }}
  */
@@ -223,6 +286,10 @@ export function buildBranchGeometry(graph, opts = {}) {
   const includeRoot = opts.includeRoot !== false;
   const minRadius = opts.minRadius !== undefined ? opts.minRadius : 0.004;
   const radialSegsFor = opts.radialSegsFor || defaultRadialSegs;
+  // Cross-section modulation genes (defaults produce a perfect circle, byte-identical to old code).
+  const ribbing  = opts.ribbing  !== undefined ? opts.ribbing  : 0;
+  const flatness = opts.flatness !== undefined ? opts.flatness : 0;
+  const ribCount = opts.ribCount !== undefined ? opts.ribCount : 10;
 
   // Guard: empty graph.
   if (!bones || bones.length === 0 || !nodes || nodes.length === 0) {
@@ -642,14 +709,29 @@ export function buildBranchGeometry(graph, opts = {}) {
       const theta = (j / segs) * TWO_PI;
       const ct = Math.cos(theta);
       const st = Math.sin(theta);
-      // Normal: outward radial direction = cos(theta)*u + sin(theta)*v
-      const nx = ct*u[0] + st*v[0];
-      const ny = ct*u[1] + st*v[1];
-      const nz = ct*u[2] + st*v[2];
-      // Position: pos + r * normal
-      const px = pos[0] + r*nx;
-      const py = pos[1] + r*ny;
-      const pz = pos[2] + r*nz;
+
+      // Compute cross-section modulation (identity at ribbing=0, flatness=0).
+      const { rScale, uScale, nU, nV } = ringProfile(theta, { ribbing, flatness, ribCount });
+
+      // Position: pos + r * rScale * (cosθ·u·uScale + sinθ·v)
+      const px = pos[0] + r * rScale * (ct * u[0] * uScale + st * v[0]);
+      const py = pos[1] + r * rScale * (ct * u[1] * uScale + st * v[1]);
+      const pz = pos[2] + r * rScale * (ct * u[2] * uScale + st * v[2]);
+
+      // Analytic outward normal in 3D: nU * u + nV * v, then normalize.
+      let nx = nU * u[0] + nV * v[0];
+      let ny = nU * u[1] + nV * v[1];
+      let nz = nU * u[2] + nV * v[2];
+      const nLen = Math.sqrt(nx*nx + ny*ny + nz*nz);
+      if (nLen > 1e-12) {
+        nx /= nLen; ny /= nLen; nz /= nLen;
+      } else {
+        // Degenerate fallback: use radial direction.
+        nx = ct*u[0] + st*v[0];
+        ny = ct*u[1] + st*v[1];
+        nz = ct*u[2] + st*v[2];
+      }
+
       const uCoord = j / segs;
       writeVertex(px, py, pz, nx, ny, nz, uCoord, arcLen, aoVal, windWeightVal, boneIdx, boneFrac);
     }

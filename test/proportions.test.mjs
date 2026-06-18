@@ -1421,6 +1421,120 @@ test('weep: zero-rng — Math.random is not called during weep pass', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 31. TRUNK TAPER — identity at trunkTaper=0 (byte-identical to baseline)
+// ---------------------------------------------------------------------------
+
+test('trunkTaper=0: trunk and branch radii are byte-identical to no-trunkTaper baseline', () => {
+  // At trunkTaper=0, effectiveTaper === TAPER for all nodes → byte-identical output.
+  function makeDeepTrunkGraph() {
+    return {
+      nodes: [
+        { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isWoody: true, branchLevel: 0, pos: [0, 1, 0], parentIdx: 0 },
+        { isWoody: true, branchLevel: 1, pos: [0, 2, 0], parentIdx: 1 },
+        { isTerminal: true, branchLevel: 2, pos: [0, 3, 0], attachPos: [0, 2, 0], parentIdx: 2 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const baseGenome = { succulence: 0.12, stemGirth: 0.68, taper: 0.72, rigidity: 0.40, verticality: 0.50 };
+
+  const gBase   = solveProportions(cloneGraph(makeDeepTrunkGraph()), baseEnvelope, baseGenome);
+  const gWithT0 = solveProportions(cloneGraph(makeDeepTrunkGraph()), baseEnvelope, { ...baseGenome, trunkTaper: 0.0 });
+
+  assert.deepStrictEqual(
+    gBase.nodes.map(n => n.radius),
+    gWithT0.nodes.map(n => n.radius),
+    'trunkTaper=0 must produce byte-identical radii to no-trunkTaper baseline'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 32. TRUNK TAPER — trunkTaper=0.85 makes trunk top/base ratio much closer to 1
+// ---------------------------------------------------------------------------
+
+test('trunkTaper=0.85: trunk top/base radius ratio is much higher than at trunkTaper=0', () => {
+  function makeLongTrunkGraph() {
+    return {
+      nodes: [
+        // node 0: trunk base (no parent)
+        { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        // node 1: trunk mid (branchLevel 0, single child of node 0)
+        { isWoody: true, branchLevel: 0, pos: [0, 1, 0], parentIdx: 0 },
+        // node 2: trunk top (branchLevel 0, single child of node 1)
+        { isWoody: true, branchLevel: 0, pos: [0, 2, 0], parentIdx: 1 },
+        // node 3: first branch off trunk top (branchLevel 1)
+        { isWoody: true, branchLevel: 1, pos: [0.5, 2.5, 0], parentIdx: 2 },
+        // node 4: terminal
+        { isTerminal: true, branchLevel: 2, pos: [0.5, 3.0, 0], attachPos: [0.5, 2.5, 0], parentIdx: 3 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const baseGenome = { succulence: 0.12, stemGirth: 0.68, taper: 0.72, rigidity: 0.40, verticality: 0.50 };
+
+  const gNoTaper = solveProportions(cloneGraph(makeLongTrunkGraph()), baseEnvelope, { ...baseGenome, trunkTaper: 0.0 });
+  const gHighT   = solveProportions(cloneGraph(makeLongTrunkGraph()), baseEnvelope, { ...baseGenome, trunkTaper: 0.85 });
+
+  // trunk base = node 0, trunk top segment = node 2
+  const baseR0 = gNoTaper.nodes[0].radius;
+  const topR0  = gNoTaper.nodes[2].radius;
+  const baseR1 = gHighT.nodes[0].radius;
+  const topR1  = gHighT.nodes[2].radius;
+
+  const ratioNoTaper = topR0 / baseR0;
+  const ratioHighT   = topR1 / baseR1;
+
+  assert.ok(
+    ratioHighT > ratioNoTaper + 0.05,
+    `trunkTaper=0.85 trunk ratio (${ratioHighT.toFixed(4)}) must be substantially > trunkTaper=0 ratio (${ratioNoTaper.toFixed(4)})`
+  );
+
+  // At trunkTaper=0.85, ratio should be close to 1.0 (near-cylindrical)
+  assert.ok(
+    ratioHighT > 0.70,
+    `trunkTaper=0.85 trunk top/base ratio (${ratioHighT.toFixed(4)}) should be close to cylindrical (> 0.70)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 33. TRUNK TAPER — pipe-model monotonicity (r_parent >= r_child) holds at trunkTaper=1
+// ---------------------------------------------------------------------------
+
+test('trunkTaper=1: pipe-model monotonicity holds (r_parent >= r_child) for trunk nodes', () => {
+  function makeLongTrunkGraph2() {
+    return {
+      nodes: [
+        { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isWoody: true, branchLevel: 0, pos: [0, 1, 0], parentIdx: 0 },
+        { isWoody: true, branchLevel: 0, pos: [0, 2, 0], parentIdx: 1 },
+        { isTerminal: true, branchLevel: 1, pos: [0, 3, 0], attachPos: [0, 2, 0], parentIdx: 2 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const g = solveProportions(cloneGraph(makeLongTrunkGraph2()), baseEnvelope, {
+    succulence: 0.12, stemGirth: 0.68, taper: 0.72, rigidity: 0.40, verticality: 0.50,
+    trunkTaper: 1.0,
+  });
+
+  // Check trunk nodes: each child radius <= parent radius
+  // node 0 → node 1 → node 2 (all branchLevel 0)
+  const r0 = g.nodes[0].radius;
+  const r1 = g.nodes[1].radius;
+  const r2 = g.nodes[2].radius;
+
+  assert.ok(r1 <= r0 + 1e-9, `trunk r1 (${r1}) must be <= r0 (${r0})`);
+  assert.ok(r2 <= r1 + 1e-9, `trunk r2 (${r2}) must be <= r1 (${r1})`);
+});
+
+// ---------------------------------------------------------------------------
 // 42. WEEP REAL-SKELETON — terminal tips actually droop on a real tree.
 //
 // REGRESSION: the synthetic weep fixtures give the terminal a 0.3-unit offset
@@ -1521,4 +1635,565 @@ test('weep terminal elongation: weep=0.9 terminal segment is longer than at weep
     lenWeep > lenBase * 1.3,
     `weep=0.9 terminal length (${lenWeep.toFixed(4)}) should be at least 1.3x weep=0 length (${lenBase.toFixed(4)})`
   );
+});
+
+// ---------------------------------------------------------------------------
+// 45. WOODINESS — woodiness=1 (or absent) is byte-identical to the baseline
+// ---------------------------------------------------------------------------
+
+// Helper: trunk-base node radius (parentIdx=-1, not isRoot)
+function trunkBaseRadiusOf(graph) {
+  const n = graph.nodes.find(n => !n.isRoot && (n.parentIdx === undefined || n.parentIdx < 0));
+  return n ? n.radius : null;
+}
+
+test('woodiness=1: radii are byte-identical to the no-woodiness baseline', () => {
+  // Three representative genomes to cross-check.
+  const genomes = [
+    { succulence: 0.12, stemGirth: 0.68, taper: 0.72 },
+    { succulence: 0.5,  stemGirth: 0.5,  taper: 0.5  },
+    { succulence: 0.0,  stemGirth: 1.0,  taper: 0.3  },
+  ];
+
+  for (const base of genomes) {
+    const gWithout  = solveProportions(cloneGraph(makeGraph()), baseEnvelope, base);
+    const gWoodiness1 = solveProportions(cloneGraph(makeGraph()), baseEnvelope, { ...base, woodiness: 1.0 });
+
+    assert.deepStrictEqual(
+      gWithout.nodes.map(n => n.radius),
+      gWoodiness1.nodes.map(n => n.radius),
+      `woodiness=1 radii must be byte-identical to no-woodiness for genome=${JSON.stringify(base)}`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 46. WOODINESS — woodiness=0 shrinks the trunk base radius substantially
+// ---------------------------------------------------------------------------
+
+test('woodiness=0: trunk-base radius is at least 50% smaller than woodiness=1', () => {
+  const genome = { succulence: 0.12, stemGirth: 0.68, taper: 0.72 };
+
+  const gFull  = solveProportions(cloneGraph(makeGraph()), baseEnvelope, { ...genome, woodiness: 1.0 });
+  const gZero  = solveProportions(cloneGraph(makeGraph()), baseEnvelope, { ...genome, woodiness: 0.0 });
+
+  const rFull = trunkBaseRadiusOf(gFull);
+  const rZero = trunkBaseRadiusOf(gZero);
+
+  assert.ok(
+    rZero < rFull * 0.50,
+    `woodiness=0 trunk-base radius (${rZero.toFixed(4)}) must be < 50% of woodiness=1 (${rFull.toFixed(4)})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 47. WOODINESS — pipe-model invariants hold at woodiness=0
+// ---------------------------------------------------------------------------
+
+test('woodiness=0: pipe-model taper still holds (parent radius >= children)', () => {
+  const genome = { succulence: 0.12, stemGirth: 0.68, taper: 0.72, woodiness: 0.0 };
+
+  function makeDeepGraph2() {
+    return {
+      nodes: [
+        { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isWoody: true, branchLevel: 1, pos: [0, 1, 0], parentIdx: 0 },
+        { isWoody: true, branchLevel: 2, pos: [0, 2, 0], parentIdx: 1 },
+        { isTerminal: true, branchLevel: 3, pos: [0, 3, 0], attachPos: [0, 2, 0], parentIdx: 2 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const g = solveProportions(cloneGraph(makeDeepGraph2()), baseEnvelope, genome);
+  const r0 = g.nodes[0].radius;
+  const r1 = g.nodes[1].radius;
+  const r2 = g.nodes[2].radius;
+
+  assert.ok(r1 < r0, `woodiness=0: level-1 radius (${r1.toFixed(4)}) must be < trunk base (${r0.toFixed(4)})`);
+  assert.ok(r2 < r1, `woodiness=0: level-2 radius (${r2.toFixed(4)}) must be < level-1 (${r1.toFixed(4)})`);
+});
+
+// ---------------------------------------------------------------------------
+// 48. WOODINESS — determinism: same woodiness → same radii on repeat calls
+// ---------------------------------------------------------------------------
+
+test('woodiness: deterministic — same genome produces identical radii on repeat calls', () => {
+  for (const w of [0.0, 0.25, 0.5, 0.75, 1.0]) {
+    const genome = { succulence: 0.3, stemGirth: 0.5, woodiness: w };
+    const r1 = solveProportions(cloneGraph(makeGraph()), baseEnvelope, genome);
+    const r2 = solveProportions(cloneGraph(makeGraph()), baseEnvelope, genome);
+    assert.deepStrictEqual(
+      r1.nodes.map(n => n.radius),
+      r2.nodes.map(n => n.radius),
+      `woodiness=${w}: radii must be bit-for-bit identical on repeat`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 49. WOODINESS — monotonic: trunk-base radius decreases as woodiness decreases
+// ---------------------------------------------------------------------------
+
+test('woodiness: trunk-base radius is monotonically larger as woodiness increases', () => {
+  const genome = { succulence: 0.12, stemGirth: 0.68, taper: 0.72 };
+  const steps = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+
+  const radii = steps.map(w => {
+    const g = solveProportions(cloneGraph(makeGraph()), baseEnvelope, { ...genome, woodiness: w });
+    return trunkBaseRadiusOf(g);
+  });
+
+  for (let i = 1; i < radii.length; i++) {
+    assert.ok(
+      radii[i] >= radii[i - 1] - 1e-12,
+      `woodiness monotonicity violated: radius[${i}]=${radii[i]} < radius[${i-1}]=${radii[i-1]}`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// phototropism — identity and scale behavior
+// ---------------------------------------------------------------------------
+
+test('phototropism=1.0 (identity): terminal position is byte-identical to genome=null call', () => {
+  const g1 = cloneGraph(makeGraph());
+  const g2 = cloneGraph(makeGraph());
+
+  const r1 = solveProportions(g1, baseEnvelope, null);
+  const r2 = solveProportions(g2, baseEnvelope, { phototropism: 1.0, rigidity: 1.0 });
+
+  // Compare terminal position — with rigidity=1.0 (no gravity droop) and phototropism=1.0
+  // (identity), and null having default phototropism=1.0, outputs must match.
+  const t1 = terminal(r1);
+  const t2 = terminal(r2);
+  assert.deepStrictEqual(
+    t1.pos.map(v => Math.round(v * 1e10) / 1e10),
+    t2.pos.map(v => Math.round(v * 1e10) / 1e10),
+    'phototropism=1.0 must produce the same terminal position as the null-genome call'
+  );
+});
+
+test('phototropism=0.0: terminal azimuth is preserved (no sun-lean)', () => {
+  // Build a graph where the terminal offset is purely sideways (no vertical component).
+  // With phototropism=0, no rotation toward sun happens → offset direction unchanged.
+  // With phototropism=1.0, the offset rotates toward lightDir → Y component changes.
+  function makeSidewaysGraph() {
+    return {
+      nodes: [
+        { isWoody: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isTerminal: true, branchLevel: 1, pos: [1, 0, 0], attachPos: [0, 0, 0], parentIdx: 0 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const withPhoto    = solveProportions(cloneGraph(makeSidewaysGraph()), baseEnvelope, {
+    phototropism: 1.0, rigidity: 1.0,
+  });
+  const withoutPhoto = solveProportions(cloneGraph(makeSidewaysGraph()), baseEnvelope, {
+    phototropism: 0.0, rigidity: 1.0,
+  });
+
+  const tWith    = terminal(withPhoto).pos;
+  const tWithout = terminal(withoutPhoto).pos;
+
+  // At phototropism=1.0, phototropism lifts the Y component (terminal leans toward sun)
+  // At phototropism=0.0, no rotation → Y stays near 0 (the original horizontal offset)
+  assert.ok(
+    Math.abs(tWithout[1]) < Math.abs(tWith[1]),
+    `phototropism=0 tip Y (${tWithout[1]}) should be closer to 0 than phototropism=1 tip Y (${tWith[1]})`
+  );
+});
+
+test('phototropism scales smoothly from 0 to 1: tip Y monotonically increases', () => {
+  // The terminal offset is sideways [1,0,0]. Sun is above (sunAngle=0.25 → lightDir has +Y).
+  // As phototropism increases from 0 to 1, the rotation toward the sun grows → tip Y increases.
+  function makeSidewaysGraph() {
+    return {
+      nodes: [
+        { isWoody: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isTerminal: true, branchLevel: 1, pos: [1, 0, 0], attachPos: [0, 0, 0], parentIdx: 0 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const steps = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  const tipYs = steps.map(p => {
+    const g = solveProportions(cloneGraph(makeSidewaysGraph()), baseEnvelope, {
+      phototropism: p, rigidity: 1.0,
+    });
+    return terminal(g).pos[1];
+  });
+
+  for (let i = 1; i < tipYs.length; i++) {
+    assert.ok(
+      tipYs[i] >= tipYs[i - 1] - 1e-12,
+      `phototropism monotonicity violated at step ${i}: tipY=${tipYs[i]} < prev=${tipYs[i-1]}`
+    );
+  }
+
+  assert.ok(
+    tipYs[tipYs.length - 1] > tipYs[0],
+    `phototropism=1 tip Y (${tipYs[tipYs.length-1]}) should exceed phototropism=0 (${tipYs[0]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PALM CROWN — azimuth span and trunk cylindricality with palm preset genes
+// ---------------------------------------------------------------------------
+
+test('palm crown: phototropism=0 rosette terminals span > 300deg azimuth (no sun-lean collapse)', () => {
+  // Build a rosette graph with 8 evenly-spaced fronds. With phototropism=1.0 all fronds
+  // rotate toward the sun, collapsing to a ~115° arc. With phototropism=0.0 they keep
+  // their skeleton azimuths → span > 300°.
+  function makeRosetteGraph(n) {
+    const nodes = [
+      { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+    ];
+    for (let i = 0; i < n; i++) {
+      const az = (2 * Math.PI * i) / n;
+      const x = Math.cos(az);
+      const z = Math.sin(az);
+      // Parent: mid-crown node
+      nodes.push({ isWoody: true, branchLevel: 1, pos: [x * 0.5, 3, z * 0.5], parentIdx: 0 });
+      // Terminal: the frond tip
+      nodes.push({
+        isTerminal: true, branchLevel: 2,
+        pos: [x, 2.5, z],
+        attachPos: [x * 0.5, 3, z * 0.5],
+        parentIdx: nodes.length - 1,
+      });
+    }
+    const bones = [];
+    for (let i = 0; i < n; i++) {
+      bones.push({ a: 0, b: 1 + i * 2 });
+      bones.push({ a: 1 + i * 2, b: 2 + i * 2 });
+    }
+    return { nodes, bones, meta: { bodyAxis: [0, 1, 0] } };
+  }
+
+  const N = 11;
+  const palmGenome = {
+    rigidity: 0.55, verticality: 0.50, droopBias: 0.28,
+    succulence: 0.85, stemGirth: 0.90, taper: 0.12,
+  };
+
+  function azimuths(graph, photo) {
+    const g = solveProportions(JSON.parse(JSON.stringify(graph)), baseEnvelope, {
+      ...palmGenome, phototropism: photo,
+    });
+    return g.nodes
+      .filter(n => n.isTerminal)
+      .map(n => Math.atan2(n.pos[2], n.pos[0]));
+  }
+
+  function azimuthSpanDeg(azs) {
+    const sorted = [...azs].sort((a, b) => a - b);
+    // Largest gap in the circle
+    let maxGap = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const next = sorted[(i + 1) % sorted.length];
+      let gap = next - sorted[i];
+      if (gap < 0) gap += 2 * Math.PI;
+      if (gap > maxGap) maxGap = gap;
+    }
+    // Span = full circle minus the largest gap
+    return (2 * Math.PI - maxGap) * (180 / Math.PI);
+  }
+
+  const graph = makeRosetteGraph(N);
+  const spanFull = azimuthSpanDeg(azimuths(graph, 1.0));
+  const spanNone = azimuthSpanDeg(azimuths(graph, 0.0));
+
+  assert.ok(
+    spanNone > 300,
+    `phototropism=0 crown span (${spanNone.toFixed(1)}°) should be > 300° — fronds not collapsed`
+  );
+  // phototropism=0 should be at least as wide as phototropism=1 (it cannot collapse the crown further).
+  assert.ok(
+    spanNone >= spanFull - 1e-9,
+    `phototropism=0 span (${spanNone.toFixed(1)}°) should be >= phototropism=1 (${spanFull.toFixed(1)}°)`
+  );
+});
+
+test('palm trunk: succulence=0.85 gives near-cylindrical effective taper (r_child/r_parent > 0.95)', () => {
+  // At succulence=0.85, effectiveTaper = taperResolved + (1 - taperResolved) * 0.85
+  // Even with taper gene=0.12 (near-zero), the blended taper ≈ 0.55 + (1-0.55)*0.85 ≈ 0.93.
+  // r_child/r_parent (level-0 → level-1 single child) should be > 0.90 (near-cylindrical).
+  function makeTrunkGraph() {
+    return {
+      nodes: [
+        { isWoody: true, branchLevel: 0, pos: [0, 0, 0], parentIdx: -1 },
+        { isWoody: true, branchLevel: 1, pos: [0, 1, 0], parentIdx: 0 },
+        { isTerminal: true, branchLevel: 2, pos: [0, 2, 0], attachPos: [0, 1, 0], parentIdx: 1 },
+      ],
+      bones: [],
+      meta: { bodyAxis: [0, 1, 0] },
+    };
+  }
+
+  const g = solveProportions(cloneGraph(makeTrunkGraph()), baseEnvelope, {
+    succulence: 0.85, stemGirth: 0.90, taper: 0.12,
+  });
+
+  const r0 = g.nodes[0].radius;
+  const r1 = g.nodes[1].radius;
+  const ratio = r1 / r0;
+
+  assert.ok(
+    ratio > 0.90,
+    `palm succulence=0.85 trunk radius ratio r_child/r_parent (${ratio.toFixed(4)}) should be > 0.90 (near-cylindrical)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// DROOP BIAS GENE TESTS
+//
+// droopBias ∈ [-0.2,0.4] (schema range) is an additive SIGNED radians bias on the
+// per-node droop, composed into BOTH droop loops (terminal + woody), scaled by
+// branchLevel. IDENTITY = 0 → no droop change → byte-identical to the prior inert gene.
+//   + droopBias → more droop (tips LOWER).
+//   − droopBias → upsweep   (tips HIGHER).
+// ---------------------------------------------------------------------------
+
+/**
+ * Graph for droopBias testing: trunk + two horizontal woody branch levels + terminal.
+ * Horizontal offsets so the downward/upward rotation has maximal observable effect
+ * on the Y coordinate. (Mirrors makeWeepGraph's intent.)
+ *
+ *   node 0: trunk base (branchLevel=0, no parent) — never biased
+ *   node 1: level-1 woody branch, horizontal offset from node 0
+ *   node 2: level-2 woody branch, horizontal offset from node 1 (has child → not tip-tapered)
+ *   node 3: terminal leaf at level-3, attachPos offset so the bending pass has a real lever
+ */
+function makeDroopBiasGraph() {
+  return {
+    nodes: [
+      { isWoody: true, isStem: true, branchLevel: 0, pos: [0, 1, 0], parentIdx: -1 },
+      { isWoody: true, branchLevel: 1, pos: [1, 1, 0], parentIdx: 0 },
+      { isWoody: true, branchLevel: 2, pos: [2, 1, 0], parentIdx: 1 },
+      { isTerminal: true, branchLevel: 3, pos: [3, 1, 0], attachPos: [2, 1, 0], parentIdx: 2 },
+    ],
+    bones: [
+      { a: 0, b: 1 },
+      { a: 1, b: 2 },
+      { a: 2, b: 3 },
+    ],
+    meta: { bodyAxis: [0, 1, 0] },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 50. DROOP BIAS NO-OP — droopBias=0 is byte-identical to a genome without the field
+// ---------------------------------------------------------------------------
+
+test('droopBias=0: output is byte-identical to genome without droopBias field (no-op guarantee)', () => {
+  const gNoField = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, {
+    rigidity: 0.5, verticality: 0.5,
+  });
+  const gZero = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, {
+    rigidity: 0.5, verticality: 0.5, droopBias: 0,
+  });
+
+  assert.deepStrictEqual(
+    gZero.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    gNoField.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    'droopBias=0 must produce bit-for-bit identical output to a genome with no droopBias field'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 51. DROOP BIAS NO-OP — droopBias=0 matches the genome=null baseline
+// ---------------------------------------------------------------------------
+
+test('droopBias=0: matches genome=null baseline (inert wiring confirmed)', () => {
+  const gNull = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, null);
+  const gZero = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { droopBias: 0 });
+
+  assert.deepStrictEqual(
+    gZero.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    gNull.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+    'droopBias=0 must match the genome=null baseline'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 52. DROOP BIAS POSITIVE — droopBias=0.4 lowers distal/terminal nodes (synthetic graph)
+// ---------------------------------------------------------------------------
+
+test('droopBias=0.4: distal woody and terminal nodes are LOWER than at droopBias=0', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+  const gBase = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: 0 });
+  const gPos  = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: 0.4 });
+
+  // Level-1 woody node lower
+  assert.ok(
+    gPos.nodes[1].pos[1] < gBase.nodes[1].pos[1],
+    `droopBias=0.4: level-1 woody Y (${gPos.nodes[1].pos[1]}) should be lower than droopBias=0 (${gBase.nodes[1].pos[1]})`
+  );
+  // Level-2 woody node lower (deeper → biased more)
+  assert.ok(
+    gPos.nodes[2].pos[1] < gBase.nodes[2].pos[1],
+    `droopBias=0.4: level-2 woody Y (${gPos.nodes[2].pos[1]}) should be lower than droopBias=0 (${gBase.nodes[2].pos[1]})`
+  );
+  // Terminal node lower (the terminal-droop loop applies the bias too)
+  assert.ok(
+    gPos.nodes[3].pos[1] < gBase.nodes[3].pos[1],
+    `droopBias=0.4: terminal Y (${gPos.nodes[3].pos[1]}) should be lower than droopBias=0 (${gBase.nodes[3].pos[1]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 53. DROOP BIAS NEGATIVE — droopBias=-0.2 raises distal/terminal nodes (upsweep)
+// ---------------------------------------------------------------------------
+
+test('droopBias=-0.2: distal woody and terminal nodes are HIGHER than at droopBias=0 (upsweep)', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+  const gBase = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: 0 });
+  const gNeg  = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: -0.2 });
+
+  assert.ok(
+    gNeg.nodes[1].pos[1] > gBase.nodes[1].pos[1],
+    `droopBias=-0.2: level-1 woody Y (${gNeg.nodes[1].pos[1]}) should be higher than droopBias=0 (${gBase.nodes[1].pos[1]})`
+  );
+  assert.ok(
+    gNeg.nodes[2].pos[1] > gBase.nodes[2].pos[1],
+    `droopBias=-0.2: level-2 woody Y (${gNeg.nodes[2].pos[1]}) should be higher than droopBias=0 (${gBase.nodes[2].pos[1]})`
+  );
+  assert.ok(
+    gNeg.nodes[3].pos[1] > gBase.nodes[3].pos[1],
+    `droopBias=-0.2: terminal Y (${gNeg.nodes[3].pos[1]}) should be higher than droopBias=0 (${gBase.nodes[3].pos[1]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 54. DROOP BIAS MEAN CANOPY Y — real skeleton: +0.4 lowers, −0.2 raises canopy Y
+//
+// On a REAL skeleton the leaf-bearing terminals are anchored to a static attachPos
+// with a near-zero lever, so the terminal-droop loop skips them (the same structural
+// decoupling the weep history documents). The woody-droop loop is what actually bends
+// the canopy scaffold, so the robust real-tree signal for "tips lower / higher" is the
+// mean Y of the non-root woody branch nodes (the canopy boughs the bias acts on). This
+// asserts the wiring works end-to-end on a real tree, with the explicit per-terminal
+// direction covered by the synthetic-graph tests above (which provide a real lever).
+// ---------------------------------------------------------------------------
+
+test('droopBias (real skeleton): +0.4 lowers and −0.2 raises mean canopy (woody) Y vs 0', () => {
+  const env = {
+    gravity: 1, medium: 'air', light: 1, sunAngle: 45, wind: 0.3,
+    aridity: 0.3, temperature: 0.5, energy: 'photo', biochem: 'carbon',
+  };
+  function meanCanopyY(droopBias) {
+    const g = { ...TREE_DEFAULT, droopBias };
+    const graph = buildSkeleton(g, mulberry32(g.structuralSeed), g.jitter);
+    solveProportions(graph, env, g);
+    const woody = graph.nodes.filter(n => !n.isRoot && n.isWoody === true && n.branchLevel > 0);
+    return woody.reduce((a, n) => a + n.pos[1], 0) / woody.length;
+  }
+
+  const yZero = meanCanopyY(0);
+  const yPos  = meanCanopyY(0.4);
+  const yNeg  = meanCanopyY(-0.2);
+
+  assert.ok(
+    yPos < yZero,
+    `droopBias=0.4 mean canopy Y (${yPos.toFixed(3)}) must be clearly below droopBias=0 (${yZero.toFixed(3)})`
+  );
+  assert.ok(
+    yNeg > yZero,
+    `droopBias=-0.2 mean canopy Y (${yNeg.toFixed(3)}) must be clearly above droopBias=0 (${yZero.toFixed(3)})`
+  );
+  // Effect must be substantial, not a rounding wiggle.
+  assert.ok(
+    yZero - yPos > 0.2,
+    `droopBias=0.4 should drop mean canopy Y by well over 0.2 units (got ${(yZero - yPos).toFixed(3)})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 55. DROOP BIAS MONOTONIC — distal node Y decreases monotonically as droopBias increases
+// ---------------------------------------------------------------------------
+
+test('droopBias: distal node Y decreases monotonically as droopBias sweeps −0.2 → 0.4', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+  const steps = [-0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4];
+
+  const nodeYs = steps.map(b => {
+    const g = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: b });
+    return g.nodes[2].pos[1];  // level-2 distal woody node
+  });
+
+  for (let i = 1; i < nodeYs.length; i++) {
+    assert.ok(
+      nodeYs[i] <= nodeYs[i - 1] + 1e-10,
+      `droopBias monotonicity violated: node[2].Y at droopBias=${steps[i]}=${nodeYs[i]} > droopBias=${steps[i-1]}=${nodeYs[i-1]}`
+    );
+  }
+
+  assert.ok(
+    nodeYs[nodeYs.length - 1] < nodeYs[0],
+    `droopBias=0.4 node[2].Y (${nodeYs[nodeYs.length-1]}) should be below droopBias=-0.2 (${nodeYs[0]})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 56. DROOP BIAS TRUNK INVARIANT — trunk base (branchLevel=0) is never biased
+// ---------------------------------------------------------------------------
+
+test('droopBias: trunk base node (branchLevel=0) is unaffected by any droopBias value', () => {
+  const genome = { rigidity: 0.5, verticality: 0.5 };
+  const gBase = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: 0 });
+  const trunkPosBase = [...gBase.nodes[0].pos];
+
+  for (const b of [-0.2, -0.1, 0.1, 0.2, 0.4]) {
+    const g = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, { ...genome, droopBias: b });
+    assert.deepStrictEqual(
+      g.nodes[0].pos,
+      trunkPosBase,
+      `droopBias=${b}: trunk base position must be unchanged (got ${g.nodes[0].pos}, expected ${trunkPosBase})`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 57. DROOP BIAS DETERMINISM — same genome produces identical output on repeat calls
+// ---------------------------------------------------------------------------
+
+test('droopBias: deterministic — same genome+envelope produces bit-for-bit identical output', () => {
+  for (const b of [-0.2, 0, 0.2, 0.4]) {
+    const genome = { rigidity: 0.4, verticality: 0.5, droopBias: b };
+    const r1 = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, genome);
+    const r2 = solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, genome);
+    assert.deepStrictEqual(
+      r1.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+      r2.nodes.map(n => ({ pos: [...n.pos], radius: n.radius })),
+      `droopBias=${b}: output must be bit-for-bit identical on repeat calls`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 58. DROOP BIAS ZERO-RNG — Math.random is never called with droopBias active
+// ---------------------------------------------------------------------------
+
+test('droopBias: zero-rng — Math.random is not called during the droopBias-active solve', () => {
+  let called = false;
+  const orig = Math.random;
+  Math.random = () => { called = true; return orig(); };
+  try {
+    solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, {
+      rigidity: 0.5, verticality: 0.5, droopBias: 0.4,
+    });
+    solveProportions(cloneGraph(makeDroopBiasGraph()), baseEnvelope, {
+      rigidity: 0.5, verticality: 0.5, droopBias: -0.2,
+    });
+    assert.strictEqual(called, false, 'Math.random must not be called with droopBias active');
+  } finally {
+    Math.random = orig;
+  }
 });

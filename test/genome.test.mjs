@@ -532,6 +532,38 @@ describe('resolve — output fields', () => {
     assert.equal(r.leafWidth, g.leafWidth);
   });
 
+  it('ribbing in output matches genome.ribbing', () => {
+    const g = randomGenome(NEUTRAL_ENV, 9);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.ribbing, g.ribbing);
+  });
+
+  it('flatness in output matches genome.flatness', () => {
+    const g = randomGenome(NEUTRAL_ENV, 9);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.flatness, g.flatness);
+  });
+
+  it('ribCount in output is integer in [8, 16]', () => {
+    const g = randomGenome(NEUTRAL_ENV, 9);
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.ok(Number.isInteger(r.ribCount), `ribCount should be integer, got ${r.ribCount}`);
+    assert.ok(r.ribCount >= 8 && r.ribCount <= 16,
+      `ribCount ${r.ribCount} not in [8, 16]`);
+  });
+
+  it('ribCount derived from segmentation=0 is 8', () => {
+    const g = { ...randomGenome(NEUTRAL_ENV, 0), segmentation: 0 };
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.ribCount, 8, `ribCount at segmentation=0 should be 8, got ${r.ribCount}`);
+  });
+
+  it('ribCount derived from segmentation=1 is 16', () => {
+    const g = { ...randomGenome(NEUTRAL_ENV, 0), segmentation: 1 };
+    const r = resolve(g, NEUTRAL_ENV);
+    assert.equal(r.ribCount, 16, `ribCount at segmentation=1 should be 16, got ${r.ribCount}`);
+  });
+
   it('uRibbing matches genome.ribbing', () => {
     const g = randomGenome(NEUTRAL_ENV, 4);
     const r = resolve(g, NEUTRAL_ENV);

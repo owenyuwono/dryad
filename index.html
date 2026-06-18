@@ -70,9 +70,187 @@
     letter-spacing: 0.01em;
     margin-top: 0;
   }
-  #ui-preset-row select {
+
+  /* Presets button — same style as seed-row buttons */
+  #presetsBtn {
     flex: 1;
+    padding: 4px 10px;
+    background: rgba(20, 40, 60, 0.9);
+    border: 1px solid rgba(80, 160, 220, 0.4);
+    color: #8cf;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    text-align: left;
+  }
+  #presetsBtn:hover {
+    background: rgba(30, 60, 100, 0.9);
+    border-color: rgba(100, 180, 255, 0.6);
+    color: #adf;
+  }
+
+  /* Presets modal backdrop */
+  #presets-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(3px);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #presets-modal.open {
+    display: flex;
+  }
+
+  /* Modal panel */
+  #presets-panel {
+    position: relative;
+    width: 480px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    background: rgba(8, 10, 14, 0.97);
+    border: 1px solid rgba(80, 120, 160, 0.45);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Modal header */
+  #presets-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.2);
+    flex-shrink: 0;
+  }
+  #presets-panel-header h2 {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: rgba(100, 160, 210, 0.8);
+    margin: 0;
+  }
+
+  /* Close button */
+  #presets-close-btn {
+    background: none;
+    border: none;
+    color: rgba(120, 160, 200, 0.6);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: color 0.12s, background 0.12s;
+    font-family: inherit;
+  }
+  #presets-close-btn:hover {
+    color: #cde;
+    background: rgba(80, 120, 160, 0.2);
+  }
+
+  /* Scrollable body */
+  #presets-body {
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px 16px 16px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(80, 120, 160, 0.3) transparent;
+  }
+  #presets-body::-webkit-scrollbar { width: 4px; }
+  #presets-body::-webkit-scrollbar-track { background: transparent; }
+  #presets-body::-webkit-scrollbar-thumb { background: rgba(80, 120, 160, 0.3); border-radius: 2px; }
+
+  /* Category heading */
+  .preset-category-heading {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(100, 160, 210, 0.55);
+    margin: 14px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(80, 120, 160, 0.15);
+  }
+  .preset-category-heading:first-child {
     margin-top: 0;
+  }
+
+  /* Card grid */
+  .preset-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 6px;
+  }
+
+  /* Individual preset card */
+  .preset-card {
+    position: relative;
+    padding: 9px 10px 8px;
+    background: rgba(20, 30, 45, 0.85);
+    border: 1px solid rgba(80, 120, 160, 0.28);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    user-select: none;
+  }
+  .preset-card:hover {
+    background: rgba(25, 45, 75, 0.9);
+    border-color: rgba(80, 160, 220, 0.55);
+  }
+  .preset-card:active {
+    background: rgba(20, 50, 90, 0.95);
+  }
+
+  /* Color swatch */
+  .preset-swatch {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  /* Label */
+  .preset-card-label {
+    font-size: 11px;
+    color: #9ab;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .preset-card:hover .preset-card-label {
+    color: #cde;
+  }
+
+  /* Experimental badge */
+  .preset-badge-experimental {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    font-size: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: rgba(200, 160, 80, 0.8);
+    background: rgba(60, 40, 10, 0.6);
+    border: 1px solid rgba(200, 160, 80, 0.35);
+    border-radius: 2px;
+    padding: 1px 3px;
+    line-height: 1.2;
+    pointer-events: none;
   }
 
   /* Seed + Generate row */
@@ -404,14 +582,8 @@
   <div id="ui-header">
     <h1>Procedural Flora</h1>
     <div id="ui-preset-row">
-      <label for="presetSelect">Preset</label>
-      <select id="presetSelect">
-        <option value="tree">Tree</option>
-        <option value="maple">Maple</option>
-        <option value="birch">Birch</option>
-        <option value="bush">Bush</option>
-        <option value="weeping">Weeping</option>
-      </select>
+      <label>Preset</label>
+      <button id="presetsBtn">Presets&#8230;</button>
     </div>
     <div id="ui-seed-row">
       <input type="text" id="seedInput" value="42" />
@@ -428,12 +600,10 @@
   <!-- Tab bar -->
   <div id="ui-tabs">
     <button class="tab-btn active" data-tab="climate">Climate</button>
-    <button class="tab-btn" data-tab="form">Form</button>
-    <button class="tab-btn" data-tab="stem">Stem</button>
-    <button class="tab-btn" data-tab="appendage">App.</button>
-    <button class="tab-btn" data-tab="posture">Posture</button>
-    <button class="tab-btn" data-tab="cosmetic">Look</button>
-    <button class="tab-btn" data-tab="roots">Roots</button>
+    <button class="tab-btn" data-tab="trunk">Trunk</button>
+    <button class="tab-btn" data-tab="branches">Branches</button>
+    <button class="tab-btn" data-tab="leaves">Leaves</button>
+    <button class="tab-btn" data-tab="root">Root</button>
   </div>
 
   <!-- Tab panels -->
@@ -470,8 +640,58 @@
       <div class="hint">Climate changes re-resolve the current genome. Hit Generate to adapt a new random specimen to these conditions.</div>
     </div>
 
-    <!-- ── FORM ───────────────────────────────────────── -->
-    <div class="tab-panel" data-panel="form">
+    <!-- ── TRUNK ──────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="trunk">
+
+      <label><span class="lname">Stem girth</span><span class="val" id="stemGirthVal">0.40</span></label>
+      <input type="range" id="stemGirthSlider" min="0" max="1" step="0.01" value="0.4"
+             data-gene="stemGirth" data-display="stemGirthVal">
+
+      <label><span class="lname">Taper</span><span class="val" id="taperVal">0.50</span></label>
+      <input type="range" id="taperSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="taper" data-display="taperVal">
+
+      <label><span class="lname">Trunk height</span><span class="val" id="trunkHeightVal">0.50</span></label>
+      <input type="range" id="trunkHeightSlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="trunkHeight" data-display="trunkHeightVal">
+
+      <label><span class="lname">Trunk taper</span><span class="val" id="trunkTaperVal">0.00</span></label>
+      <input type="range" id="trunkTaperSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="trunkTaper" data-display="trunkTaperVal">
+
+      <label><span class="lname">Succulence</span><span class="val" id="succulenceVal">0.20</span></label>
+      <input type="range" id="succulenceSlider" min="0" max="1" step="0.01" value="0.2"
+             data-gene="succulence" data-display="succulenceVal">
+
+      <label><span class="lname">Ribbing</span><span class="val" id="ribbingVal">0.05</span></label>
+      <input type="range" id="ribbingSlider" min="0" max="1" step="0.01" value="0.05"
+             data-gene="ribbing" data-display="ribbingVal">
+
+      <label><span class="lname">Segmentation</span><span class="val" id="segmentationVal">0.20</span></label>
+      <input type="range" id="segmentationSlider" min="0" max="1" step="0.01" value="0.2"
+             data-gene="segmentation" data-display="segmentationVal">
+
+      <label><span class="lname">Spininess</span><span class="val" id="spininessVal">0.05</span></label>
+      <input type="range" id="spininessSlider" min="0" max="1" step="0.01" value="0.05"
+             data-gene="spininess" data-display="spininessVal">
+
+      <label><span class="lname">Woodiness</span><span class="val" id="woodinessVal">1.00</span></label>
+      <input type="range" id="woodinessSlider" min="0" max="1" step="0.01" value="1.00"
+             data-gene="woodiness" data-display="woodinessVal">
+
+      <label><span class="lname">Bark color</span><span class="val" id="barkColorVal">0.85</span></label>
+      <input type="range" id="barkColorSlider" min="0" max="1" step="0.01" value="0.85"
+             data-gene="barkColor" data-display="barkColorVal">
+
+      <label><span class="lname">Bark pattern</span><span class="val" id="barkPatternVal">0.80</span></label>
+      <input type="range" id="barkPatternSlider" min="0" max="1" step="0.01" value="0.80"
+             data-gene="barkPattern" data-display="barkPatternVal">
+
+      <div class="hint">High succulence → swollen cactus body. Low → bark trunk. Bark color: 0=white birch, 1=dark brown. Bark pattern: 0=smooth, 1=furrowed. Woodiness: 1=woody bark, 0=soft green herbaceous stem. Trunk height: 0.5=identity, 0=short bush, 1=tall. Trunk taper: 0=natural taper, 1=cylindrical trunk.</div>
+    </div>
+
+    <!-- ── BRANCHES ───────────────────────────────────── -->
+    <div class="tab-panel" data-panel="branches">
 
       <label><span class="lname">Branchiness</span><span class="val" id="brchinessVal">0.50</span></label>
       <input type="range" id="brchinessSlider" min="0" max="1" step="0.01" value="0.5"
@@ -489,71 +709,9 @@
       <input type="range" id="radialOrderSlider" min="0" max="1" step="0.01" value="0.25"
              data-gene="radialOrder" data-display="radialOrderVal">
 
-      <div class="hint">High branchiness → bushy; low → columnar or single-stem.</div>
-    </div>
-
-    <!-- ── STEM ───────────────────────────────────────── -->
-    <div class="tab-panel" data-panel="stem">
-
-      <label><span class="lname">Succulence</span><span class="val" id="succulenceVal">0.20</span></label>
-      <input type="range" id="succulenceSlider" min="0" max="1" step="0.01" value="0.2"
-             data-gene="succulence" data-display="succulenceVal">
-
-      <label><span class="lname">Stem girth</span><span class="val" id="stemGirthVal">0.40</span></label>
-      <input type="range" id="stemGirthSlider" min="0" max="1" step="0.01" value="0.4"
-             data-gene="stemGirth" data-display="stemGirthVal">
-
-      <label><span class="lname">Taper</span><span class="val" id="taperVal">0.50</span></label>
-      <input type="range" id="taperSlider" min="0" max="1" step="0.01" value="0.5"
-             data-gene="taper" data-display="taperVal">
-
-      <label><span class="lname">Ribbing</span><span class="val" id="ribbingVal">0.05</span></label>
-      <input type="range" id="ribbingSlider" min="0" max="1" step="0.01" value="0.05"
-             data-gene="ribbing" data-display="ribbingVal">
-
-      <label><span class="lname">Segmentation</span><span class="val" id="segmentationVal">0.20</span></label>
-      <input type="range" id="segmentationSlider" min="0" max="1" step="0.01" value="0.2"
-             data-gene="segmentation" data-display="segmentationVal">
-
-      <label><span class="lname">Spininess</span><span class="val" id="spininessVal">0.05</span></label>
-      <input type="range" id="spininessSlider" min="0" max="1" step="0.01" value="0.05"
-             data-gene="spininess" data-display="spininessVal">
-
-      <label><span class="lname">Bark color</span><span class="val" id="barkColorVal">0.85</span></label>
-      <input type="range" id="barkColorSlider" min="0" max="1" step="0.01" value="0.85"
-             data-gene="barkColor" data-display="barkColorVal">
-
-      <label><span class="lname">Bark pattern</span><span class="val" id="barkPatternVal">0.80</span></label>
-      <input type="range" id="barkPatternSlider" min="0" max="1" step="0.01" value="0.80"
-             data-gene="barkPattern" data-display="barkPatternVal">
-
-      <div class="hint">High succulence → swollen cactus body. Low → bark trunk. Bark color: 0=white birch, 1=dark brown. Bark pattern: 0=smooth, 1=furrowed.</div>
-    </div>
-
-    <!-- ── APPENDAGE ──────────────────────────────────── -->
-    <div class="tab-panel" data-panel="appendage">
-
-      <label><span class="lname">Breadth</span><span class="val" id="appendageBreadthVal">0.45</span></label>
-      <input type="range" id="appendageBreadthSlider" min="0" max="1" step="0.01" value="0.45"
-             data-gene="appendageBreadth" data-display="appendageBreadthVal">
-
-      <label><span class="lname">Density</span><span class="val" id="appendageDensityVal">0.40</span></label>
-      <input type="range" id="appendageDensitySlider" min="0" max="1" step="0.01" value="0.4"
-             data-gene="appendageDensity" data-display="appendageDensityVal">
-
-      <div class="hint">Controls leaf/frond/pad appendages along branches.</div>
-    </div>
-
-    <!-- ── POSTURE ────────────────────────────────────── -->
-    <div class="tab-panel" data-panel="posture">
-
-      <label><span class="lname">Verticality</span><span class="val" id="verticalityVal">0.50</span></label>
-      <input type="range" id="verticalitySlider" min="0" max="1" step="0.01" value="0.5"
-             data-gene="verticality" data-display="verticalityVal">
-
-      <label><span class="lname">Rigidity</span><span class="val" id="rigidityVal">0.60</span></label>
-      <input type="range" id="rigiditySlider" min="0" max="1" step="0.01" value="0.6"
-             data-gene="rigidity" data-display="rigidityVal">
+      <label><span class="lname">Whorl</span><span class="val" id="whorlVal">0.00</span></label>
+      <input type="range" id="whorlSlider" min="0" max="1" step="0.01" value="0.00"
+             data-gene="whorl" data-display="whorlVal">
 
       <label><span class="lname">Branch angle</span><span class="val" id="branchAngleVal">0.58</span></label>
       <input type="range" id="branchAngleSlider" min="0.35" max="0.80" step="0.01" value="0.575"
@@ -571,23 +729,23 @@
       <input type="range" id="droopBiasSlider" min="-0.2" max="0.4" step="0.01" value="0.1"
              data-gene="droopBias" data-display="droopBiasVal">
 
+      <label><span class="lname">Rigidity</span><span class="val" id="rigidityVal">0.60</span></label>
+      <input type="range" id="rigiditySlider" min="0" max="1" step="0.01" value="0.6"
+             data-gene="rigidity" data-display="rigidityVal">
+
+      <label><span class="lname">Verticality</span><span class="val" id="verticalityVal">0.50</span></label>
+      <input type="range" id="verticalitySlider" min="0" max="1" step="0.01" value="0.5"
+             data-gene="verticality" data-display="verticalityVal">
+
       <label><span class="lname">Weep</span><span class="val" id="weepVal">0.00</span></label>
       <input type="range" id="weepSlider" min="0" max="1" step="0.01" value="0.0"
              data-gene="weep" data-display="weepVal">
 
-      <label><span class="lname">Trunk height</span><span class="val" id="trunkHeightVal">0.50</span></label>
-      <input type="range" id="trunkHeightSlider" min="0" max="1" step="0.01" value="0.5"
-             data-gene="trunkHeight" data-display="trunkHeightVal">
-
-      <div class="hint">Droop bias negative → upswept; positive → weeping form. Weep: 0=no-op, 1=strongly pendulous. Trunk height: 0.5=identity, 0=short bush, 1=tall.</div>
+      <div class="hint">High branchiness → bushy; low → columnar or single-stem. Whorl: 0=continuous branching, 1=distinct tiered whorls (pine/fir). Droop bias negative → upswept; positive → weeping form. Weep: 0=no-op, 1=strongly pendulous.</div>
     </div>
 
-    <!-- ── COSMETIC ───────────────────────────────────── -->
-    <div class="tab-panel" data-panel="cosmetic">
-
-      <label><span class="lname">Pigment</span><span class="val" id="pigmentVal">0.45</span></label>
-      <input type="range" id="pigmentSlider" min="0" max="1" step="0.01" value="0.45"
-             data-gene="pigment" data-display="pigmentVal">
+    <!-- ── LEAVES ─────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="leaves">
 
       <label><span class="lname">Leaf size</span><span class="val" id="leafSizeVal">1.10</span></label>
       <input type="range" id="leafSizeSlider" min="0.6" max="1.6" step="0.01" value="1.1"
@@ -596,10 +754,6 @@
       <label><span class="lname">Leaf density</span><span class="val" id="leafDensityVal">1.00</span></label>
       <input type="range" id="leafDensitySlider" min="0.5" max="1.5" step="0.01" value="1.0"
              data-gene="leafDensity" data-display="leafDensityVal">
-
-      <label><span class="lname">Jitter</span><span class="val" id="jitterVal">1.00</span></label>
-      <input type="range" id="jitterSlider" min="0" max="1.5" step="0.01" value="1.0"
-             data-gene="jitter" data-display="jitterVal">
 
       <label><span class="lname">Leaf breadth</span><span class="val" id="leafWidthVal">0.50</span></label>
       <input type="range" id="leafWidthSlider" min="0" max="1" step="0.01" value="0.5"
@@ -621,11 +775,43 @@
       <input type="range" id="leafLobingSlider" min="0" max="1" step="0.01" value="0.0"
              data-gene="leafLobing" data-display="leafLobingVal">
 
-      <div class="hint">drag to orbit &nbsp;·&nbsp; wheel to zoom<br>shift-drag / right-drag to pan</div>
+      <label><span class="lname">Needle leaf</span><span class="val" id="needleLeafVal">0.00</span></label>
+      <input type="range" id="needleLeafSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="needleLeaf" data-display="needleLeafVal">
+
+      <label><span class="lname">Frond leaf</span><span class="val" id="frondLeafVal">0.00</span></label>
+      <input type="range" id="frondLeafSlider" min="0" max="1" step="0.01" value="0.0"
+             data-gene="frondLeaf" data-display="frondLeafVal">
+
+      <label><span class="lname">Leaf scale</span><span class="val" id="leafScaleVal">1.00</span></label>
+      <input type="range" id="leafScaleSlider" min="1" max="3" step="0.05" value="1.0"
+             data-gene="leafScale" data-display="leafScaleVal">
+
+      <label><span class="lname">Tip tuft</span><span class="val" id="tipTuftVal">0.00</span></label>
+      <input type="range" id="tipTuftSlider" min="0" max="1" step="0.01" value="0.00"
+             data-gene="tipTuft" data-display="tipTuftVal">
+
+      <label><span class="lname">Appendage breadth</span><span class="val" id="appendageBreadthVal">0.45</span></label>
+      <input type="range" id="appendageBreadthSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="appendageBreadth" data-display="appendageBreadthVal">
+
+      <label><span class="lname">Appendage density</span><span class="val" id="appendageDensityVal">0.40</span></label>
+      <input type="range" id="appendageDensitySlider" min="0" max="1" step="0.01" value="0.4"
+             data-gene="appendageDensity" data-display="appendageDensityVal">
+
+      <label><span class="lname">Pigment</span><span class="val" id="pigmentVal">0.45</span></label>
+      <input type="range" id="pigmentSlider" min="0" max="1" step="0.01" value="0.45"
+             data-gene="pigment" data-display="pigmentVal">
+
+      <label><span class="lname">Jitter</span><span class="val" id="jitterVal">1.00</span></label>
+      <input type="range" id="jitterSlider" min="0" max="1.5" step="0.01" value="1.0"
+             data-gene="jitter" data-display="jitterVal">
+
+      <div class="hint">Needle leaf: 0=broadleaf card, 1=needle-fascicle sprite (conifer). Frond leaf: 0=broadleaf, 1=palm-frond sprite. Leaf scale: 1=identity, 3=3× bigger clusters (fronds, tropical leaves). Tip tuft: 0=no-op, 1=foliage concentrated at branch tips (pine needle bundles).<br>drag to orbit &nbsp;·&nbsp; wheel to zoom<br>shift-drag / right-drag to pan</div>
     </div>
 
-    <!-- ── ROOTS ─────────────────────────────────────── -->
-    <div class="tab-panel" data-panel="roots">
+    <!-- ── ROOT ───────────────────────────────────────── -->
+    <div class="tab-panel" data-panel="root">
 
       <label><span class="lname">Root count</span><span class="val" id="rootCountVal">0.45</span></label>
       <input type="range" id="rootCountSlider" min="0" max="1" step="0.01" value="0.45"
@@ -790,5 +976,19 @@
   });
 })();
 </script>
+
+<!-- Presets modal — hidden by default, opened by #presetsBtn -->
+<div id="presets-modal" role="dialog" aria-modal="true" aria-label="Presets">
+  <div id="presets-panel">
+    <div id="presets-panel-header">
+      <h2>Presets</h2>
+      <button id="presets-close-btn" aria-label="Close presets">&#x2715;</button>
+    </div>
+    <div id="presets-body">
+      <!-- Cards are injected by main.js -->
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

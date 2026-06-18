@@ -52,7 +52,7 @@ function makeFloraParent() {
     branchAngle:      0.55,
     lengthRatio:      0.70,
     apicalBias:       0.5,
-    droopBias:        0.1,
+    droopBias:        0.0,
     // cosmetic tier
     pigment:          0.4,
     leafSize:         1.0,
@@ -70,6 +70,21 @@ function makeFloraParent() {
     weep:             0.00,
     // trunkHeight (draw 39)
     trunkHeight:      0.50,
+    // new inert genes (draws 40–42)
+    flatness:         0.00,
+    stemSpread:       0.00,
+    rosette:          0.00,
+    // new inert genes (draws 43–45)
+    woodiness:        1.00,
+    whorl:            0.00,
+    tipTuft:          0.00,
+    // new inert genes (draws 46–48)
+    needleLeaf:       0.00,
+    leafScale:        1.00,
+    frondLeaf:        0.00,
+    phototropism:     1.00,  // 1.0 = full phototropism (identity — draw 49)
+    trunkTaper:       0.00,  // 0 = identity (draw 50)
+    trunkRings:       0.00,  // 0 = identity (no ring banding — draw 51)
     structuralSeed:   0xDEADBEEF,
     // root system tier (added Task 1 — required so genomeDistance is non-NaN)
     rootCount:        0.45,

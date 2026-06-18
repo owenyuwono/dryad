@@ -83,18 +83,33 @@ const EXPECTED_STRUCTURAL = [
   // Root system genes (added Task 1)
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
+  // New inert genes (draws 41–42)
+  'stemSpread', 'rosette',
+  // New inert gene (draw 44)
+  'whorl',
 ];
 
 const EXPECTED_PROPORTIONS = [
   'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
   'ribbing', 'spininess', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
   'weep',
+  // New inert gene (draw 40)
+  'flatness',
+  // New inert genes (draws 43, 45)
+  'woodiness', 'tipTuft',
+  // phototropism (draw 49)
+  'phototropism',
+  // trunkTaper (draw 50)
+  'trunkTaper',
 ];
 
 const EXPECTED_COSMETIC = [
   'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
   'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
   'barkColor', 'barkPattern',
+  'needleLeaf', 'leafScale', 'frondLeaf',
+  // trunkRings (draw 51)
+  'trunkRings',
   'structuralSeed',
 ];
 
@@ -144,6 +159,24 @@ const EXPECTED_RANGES = {
   rootButtress:     [0, 1],
   rootBranchiness:  [0, 1],
   rootTaper:        [0, 1],
+  // New inert genes (draws 40–42)
+  flatness:         [0.0, 1.0],
+  stemSpread:       [0, 1],
+  rosette:          [0, 1],
+  // New inert genes (draws 43–45)
+  woodiness:        [0.0, 1.0],
+  whorl:            [0, 1],
+  tipTuft:          [0.0, 1.0],
+  // New inert genes (draws 46–48)
+  needleLeaf:       [0.0, 1.0],
+  leafScale:        [1.0, 3.0],
+  frondLeaf:        [0.0, 1.0],
+  // phototropism (draw 49)
+  phototropism:     [0.0, 1.0],
+  // trunkTaper (draw 50)
+  trunkTaper:       [0.0, 1.0],
+  // trunkRings (draw 51)
+  trunkRings:       [0.0, 1.0],
 };
 
 // ---------------------------------------------------------------------------
@@ -300,6 +333,11 @@ describe('clampField — per-gene clamping', () => {
     'ribbing', 'spininess', 'apicalBias', 'pigment', 'leafWidth',
     'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
     'barkColor', 'barkPattern', 'weep',
+    'woodiness', 'whorl', 'tipTuft',
+    'needleLeaf', 'frondLeaf',
+    'phototropism',
+    'trunkTaper',
+    'trunkRings',
   ];
 
   for (const field of UNIT_GENES) {

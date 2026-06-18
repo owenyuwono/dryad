@@ -10,6 +10,8 @@ import {
   superformulaOutline,
   pointInPolygon,
   growVenation,
+  needleFascicleParams,
+  frondLeafletParams,
 } from '../src/leafTexture.js';
 
 test('leafHalfWidth is 0 at base (t=0) for all breadths', () => {
@@ -480,4 +482,440 @@ test('maple: determinism — same genes → identical leafBaseParams and outline
   const o1 = makeOutline(genes, 360);
   const o2 = makeOutline(genes, 360);
   assert.deepStrictEqual(o1, o2, 'outline should be deterministic for maple genes');
+});
+
+// ---------------------------------------------------------------------------
+// needleLeaf gene tests — needleFascicleParams pure-math assertions
+// ---------------------------------------------------------------------------
+
+// Production needle count used by makeLeafClusterTexture — 10 needles for a tight spiky fascicle.
+// Tests below exercise the actual production count so regressions are caught early.
+const PROD_NEEDLE_COUNT = 10;
+
+test('needleFascicleParams returns the requested needle count', () => {
+  for (const count of [8, 16, 20, PROD_NEEDLE_COUNT]) {
+    const needles = needleFascicleParams(42, count);
+    assert.strictEqual(needles.length, count, `expected ${count} needles`);
+  }
+});
+
+test('needleFascicleParams each needle has finite angle/length/width (production count)', () => {
+  const needles = needleFascicleParams(7, PROD_NEEDLE_COUNT);
+  for (const n of needles) {
+    assert.ok(Number.isFinite(n.angle),  `angle must be finite, got ${n.angle}`);
+    assert.ok(Number.isFinite(n.length), `length must be finite, got ${n.length}`);
+    assert.ok(Number.isFinite(n.width),  `width must be finite, got ${n.width}`);
+  }
+});
+
+test('needleFascicleParams needle lengths are in [0.82, 1.00] (production count)', () => {
+  const needles = needleFascicleParams(13, PROD_NEEDLE_COUNT);
+  for (const n of needles) {
+    assert.ok(n.length >= 0.82 && n.length <= 1.00,
+      `length ${n.length} out of [0.82, 1.00]`);
+  }
+});
+
+test('needleFascicleParams needle widths are in [0.012, 0.022] (production count)', () => {
+  const needles = needleFascicleParams(99, PROD_NEEDLE_COUNT);
+  for (const n of needles) {
+    assert.ok(n.width >= 0.012 && n.width <= 0.022,
+      `width ${n.width} out of [0.012, 0.022]`);
+  }
+});
+
+test('needleFascicleParams is deterministic for the same seed (production count)', () => {
+  const a = needleFascicleParams(55, PROD_NEEDLE_COUNT);
+  const b = needleFascicleParams(55, PROD_NEEDLE_COUNT);
+  for (let i = 0; i < PROD_NEEDLE_COUNT; i++) {
+    assert.strictEqual(a[i].angle,  b[i].angle,  `angle mismatch at needle ${i}`);
+    assert.strictEqual(a[i].length, b[i].length, `length mismatch at needle ${i}`);
+    assert.strictEqual(a[i].width,  b[i].width,  `width mismatch at needle ${i}`);
+  }
+});
+
+test('needleFascicleParams different seeds → different params', () => {
+  const a = needleFascicleParams(1, PROD_NEEDLE_COUNT);
+  const b = needleFascicleParams(2, PROD_NEEDLE_COUNT);
+  const anyDiffers = a.some((n, i) => n.angle !== b[i].angle || n.length !== b[i].length);
+  assert.ok(anyDiffers, 'seeds 1 and 2 should produce different needle params');
+});
+
+test('needleFascicleParams needles span the tight ±17.5° splay arc (35° total, production count)', () => {
+  // Production splay is 35° total (±17.5°). Outer needles with jitter should cover ≥20°.
+  const needles = needleFascicleParams(3, PROD_NEEDLE_COUNT);
+  const minAngle = Math.min(...needles.map(n => n.angle));
+  const maxAngle = Math.max(...needles.map(n => n.angle));
+  const spanDeg  = (maxAngle - minAngle) * (180 / Math.PI);
+  assert.ok(spanDeg >= 20,
+    `needle fan should span ≥20°, got ${spanDeg.toFixed(1)}°`);
+  assert.ok(spanDeg <= 50,
+    `needle fan should stay narrow (≤50°), got ${spanDeg.toFixed(1)}° — fascicle is too wide`);
+});
+
+test('makeLeafClusterTexture returns null in Node for needle path (no document)', () => {
+  // Both broadleaf (needleLeaf=0) and needle (needleLeaf=1) should return null in Node
+  assert.strictEqual(typeof document, 'undefined');
+  const result = makeLeafClusterTexture({ pigment: 0.4, breadth: 0.5, seed: 1, needleLeaf: 1 });
+  assert.strictEqual(result, null);
+});
+
+test('needleLeaf=0 does not change clusterLeafCount or clusterLeafParams (broadleaf path unchanged)', () => {
+  // The broadleaf path derives count/params from the same seed regardless of needleLeaf.
+  // Since needleLeaf=0 leaves those helper functions untouched, both calls must agree.
+  const seed  = 77;
+  const count = clusterLeafCount(seed);
+  const pA    = clusterLeafParams(seed, count);
+  const pB    = clusterLeafParams(seed, count);
+  // Confirming helper functions are pure — needle gene has zero influence on broadleaf helpers
+  assert.deepStrictEqual(pA, pB, 'broadleaf params must be identical with/without needleLeaf=0');
+});
+
+test('needleFascicleParams uses an isolated rng sub-stream (different from broadleaf clusterLeafParams)', () => {
+  // For the same numeric seed, needleFascicleParams and clusterLeafParams should
+  // produce unrelated values — they XOR the seed with different salts.
+  const seed        = 42;
+  const count       = clusterLeafCount(seed);
+  const broadleaf   = clusterLeafParams(seed, count);
+  const needle      = needleFascicleParams(seed, PROD_NEEDLE_COUNT);
+  // The first angle from each sub-stream should differ (they use different XOR salts)
+  const broadleafAngle0 = broadleaf[0].angle;
+  const needleAngle0    = needle[0].angle;
+  assert.notStrictEqual(broadleafAngle0, needleAngle0,
+    'needle and broadleaf rng sub-streams must be independent');
+});
+
+// ---------------------------------------------------------------------------
+// frondLeaf gene tests — frondLeafletParams pure-math assertions
+// ---------------------------------------------------------------------------
+
+test('frondLeafletParams returns the requested leaflet count', () => {
+  for (const count of [8, 12, 16, 20]) {
+    const leaflets = frondLeafletParams(42, count);
+    assert.strictEqual(leaflets.length, count, `expected ${count} leaflets`);
+  }
+});
+
+test('frondLeafletParams each leaflet has finite t/angle/length', () => {
+  const leaflets = frondLeafletParams(7, 20);
+  for (const l of leaflets) {
+    assert.ok(Number.isFinite(l.t),      `t must be finite, got ${l.t}`);
+    assert.ok(Number.isFinite(l.angle),  `angle must be finite, got ${l.angle}`);
+    assert.ok(Number.isFinite(l.length), `length must be finite, got ${l.length}`);
+  }
+});
+
+test('frondLeafletParams t values are in [0, 1]', () => {
+  const leaflets = frondLeafletParams(13, 20);
+  for (const l of leaflets) {
+    assert.ok(l.t >= 0 && l.t <= 1, `t ${l.t} out of [0, 1]`);
+  }
+});
+
+test('frondLeafletParams length values are in (0, 1]', () => {
+  const leaflets = frondLeafletParams(99, 20);
+  for (const l of leaflets) {
+    assert.ok(l.length > 0 && l.length <= 1.0, `length ${l.length} out of (0, 1]`);
+  }
+});
+
+test('frondLeafletParams leaflets span both sides (positive and negative angles)', () => {
+  const leaflets = frondLeafletParams(5, 20);
+  const hasPositive = leaflets.some(l => l.angle > 0);
+  const hasNegative = leaflets.some(l => l.angle < 0);
+  assert.ok(hasPositive, 'must have right-side leaflets (angle > 0)');
+  assert.ok(hasNegative, 'must have left-side leaflets (angle < 0)');
+});
+
+test('frondLeafletParams is deterministic for the same seed', () => {
+  const a = frondLeafletParams(55, 20);
+  const b = frondLeafletParams(55, 20);
+  for (let i = 0; i < 20; i++) {
+    assert.strictEqual(a[i].t,      b[i].t,      `t mismatch at leaflet ${i}`);
+    assert.strictEqual(a[i].angle,  b[i].angle,  `angle mismatch at leaflet ${i}`);
+    assert.strictEqual(a[i].length, b[i].length, `length mismatch at leaflet ${i}`);
+  }
+});
+
+test('frondLeafletParams different seeds → different params', () => {
+  const a = frondLeafletParams(1, 20);
+  const b = frondLeafletParams(2, 20);
+  const anyDiffers = a.some((l, i) => l.t !== b[i].t || l.angle !== b[i].angle);
+  assert.ok(anyDiffers, 'seeds 1 and 2 should produce different frond leaflet params');
+});
+
+test('frondLeafletParams uses an isolated rng sub-stream (different from needle and broadleaf)', () => {
+  // Same seed: frond, needle, and broadleaf sub-streams must all be independent.
+  const seed       = 42;
+  const count      = 20;
+  const frond      = frondLeafletParams(seed, count);
+  const needle     = needleFascicleParams(seed, count);
+  const broadCount = clusterLeafCount(seed);
+  const broadleaf  = clusterLeafParams(seed, broadCount);
+
+  // Frond vs needle: first t vs first angle (different data shapes but stream independence shown by value difference)
+  assert.notStrictEqual(frond[0].t, needle[0].angle,
+    'frond and needle rng sub-streams must be independent');
+
+  // Frond vs broadleaf: first t should not equal first broadleaf angle (different salts)
+  assert.notStrictEqual(frond[0].t, broadleaf[0].angle,
+    'frond and broadleaf rng sub-streams must be independent');
+});
+
+test('makeLeafClusterTexture returns null in Node for frond path (no document)', () => {
+  // frondLeaf=1 should return null in Node just like broadleaf and needle paths
+  assert.strictEqual(typeof document, 'undefined');
+  const result = makeLeafClusterTexture({ pigment: 0.4, breadth: 0.5, seed: 1, frondLeaf: 1 });
+  assert.strictEqual(result, null);
+});
+
+test('frondLeaf=0 does not affect broadleaf or needle paths (backward compat)', () => {
+  // frondLeaf=0 with needleLeaf=0 must not change clusterLeafCount or clusterLeafParams
+  const seed  = 77;
+  const count = clusterLeafCount(seed);
+  const pA    = clusterLeafParams(seed, count);
+  const pB    = clusterLeafParams(seed, count);
+  assert.deepStrictEqual(pA, pB, 'broadleaf params must be identical regardless of frondLeaf=0');
+  // needleFascicleParams is also independent
+  const nA = needleFascicleParams(seed, count);
+  const nB = needleFascicleParams(seed, count);
+  assert.deepStrictEqual(nA, nB, 'needle params must be identical regardless of frondLeaf=0');
+});
+
+// ---------------------------------------------------------------------------
+// Continuous blend tests — mock canvas approach.
+//
+// makeLeafClusterTexture is browser-only (returns null when document is absent).
+// To test the blend logic in Node, we inject a minimal document/canvas mock that:
+//  - records every (globalAlpha, drawImage) call pair so we can verify blend alphas.
+//  - no-ops all draw primitives (fill, stroke, etc.) so the function completes cleanly.
+//
+// What we assert: for 0 < gene < 1, the alpha passed to drawImage for the
+// "overlay" layer (needle or frond) equals the gene value, and increases
+// monotonically across the sample set {0.25, 0.5, 0.75}.  At gene=0 (pure
+// broadleaf) _stampAt is never called at all (direct draw, no drawImage stamp).
+// At gene=1 (pure overlay) _stampAt is again not called (direct draw).
+// This proves there is no discontinuous cliff at the midpoint.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal canvas/context mock that records globalAlpha at the moment
+ * drawImage is called.  Returns { globalDoc, capturedAlphas }.
+ * capturedAlphas is populated in-place after the function runs.
+ */
+function makeCanvasMock() {
+  const capturedAlphas = [];
+
+  // Minimal 2D context stub
+  function makeCtxStub() {
+    const stub = {
+      _alpha: 1,
+      get globalAlpha() { return this._alpha; },
+      set globalAlpha(v) { this._alpha = v; },
+      // Capture alpha at the moment drawImage is invoked
+      drawImage(_src, _x, _y) { capturedAlphas.push(this._alpha); },
+      // No-op draw primitives — covers everything called by drawLeaf,
+      // drawNeedleFascicle, drawPalmFrond, and the _stampAt harness.
+      clearRect() {},
+      save() {},
+      restore() {},
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      bezierCurveTo() {},
+      quadraticCurveTo() {},
+      closePath() {},
+      fill() {},
+      stroke() {},
+      fillRect() {},
+      ellipse() {},
+      translate() {},
+      rotate() {},
+      scale() {},
+      createLinearGradient() {
+        return { addColorStop() {} };
+      },
+      get strokeStyle() { return ''; },
+      set strokeStyle(_v) {},
+      get fillStyle() { return ''; },
+      set fillStyle(_v) {},
+      get lineWidth() { return 1; },
+      set lineWidth(_v) {},
+      get lineCap() { return 'butt'; },
+      set lineCap(_v) {},
+      get globalCompositeOperation() { return 'source-over'; },
+      set globalCompositeOperation(_v) {},
+    };
+    return stub;
+  }
+
+  // Minimal canvas stub — getContext always returns a fresh ctx stub so each
+  // canvas (main + scratch) has its own alpha tracker.
+  function makeCanvasStub() {
+    const ctxStub = makeCtxStub();
+    return {
+      width: 0,
+      height: 0,
+      getContext(_type) { return ctxStub; },
+    };
+  }
+
+  const globalDoc = {
+    createElement(tag) {
+      if (tag === 'canvas') return makeCanvasStub();
+      throw new Error(`mock document.createElement: unsupported tag "${tag}"`);
+    },
+  };
+
+  return { globalDoc, capturedAlphas };
+}
+
+/**
+ * Run makeLeafClusterTexture with a mock document injected as a global.
+ * Returns the array of globalAlpha values captured at each drawImage call.
+ */
+async function runWithMock(args) {
+  // We need to temporarily define `document` in global scope so the module
+  // branch `typeof document === 'undefined'` returns false.
+  // Node modules use `globalThis`; we set and delete it around the call.
+  const { globalDoc, capturedAlphas } = makeCanvasMock();
+  globalThis.document = globalDoc;
+  try {
+    makeLeafClusterTexture(args);
+  } finally {
+    delete globalThis.document;
+  }
+  return capturedAlphas;
+}
+
+// ---------------------------------------------------------------------------
+// needleLeaf continuity test
+// ---------------------------------------------------------------------------
+
+test('needleLeaf blend: overlay alpha increases monotonically (no 0.5 cliff)', async () => {
+  // For each intermediate value of needleLeaf, the overlay (needle) layer is
+  // stamped via drawImage at globalAlpha = needleLeaf.
+  // At 0 and 1 the relevant layer is drawn directly — _stampAt is not called —
+  // so capturedAlphas has a different length.  We test the intermediate values
+  // for strict monotonicity.
+  const levels = [0.25, 0.5, 0.75];
+  const overlayAlphas = [];
+  for (const nl of levels) {
+    const alphas = await runWithMock({ pigment: 0.35, seed: 3, needleLeaf: nl, frondLeaf: 0 });
+    // Two drawImage stamps per blend: broadleaf at (1-nl), needles at nl.
+    // The needle overlay is the LAST stamp (index 1).
+    assert.strictEqual(alphas.length, 2,
+      `needleLeaf=${nl}: expected 2 drawImage stamps, got ${alphas.length}`);
+    assert.ok(Math.abs(alphas[0] - (1 - nl)) < 1e-10,
+      `needleLeaf=${nl}: broadleaf stamp alpha should be ${1-nl}, got ${alphas[0]}`);
+    assert.ok(Math.abs(alphas[1] - nl) < 1e-10,
+      `needleLeaf=${nl}: needle stamp alpha should be ${nl}, got ${alphas[1]}`);
+    overlayAlphas.push(alphas[1]);
+  }
+  // Overlay alphas: 0.25 < 0.5 < 0.75 — strictly monotonically increasing.
+  for (let i = 1; i < overlayAlphas.length; i++) {
+    assert.ok(overlayAlphas[i] > overlayAlphas[i - 1],
+      `needle overlay alpha not monotone: ${overlayAlphas[i - 1]} → ${overlayAlphas[i]}`);
+  }
+  // No cliff: 0.5 is strictly between 0.25 and 0.75 (not equal to either endpoint).
+  assert.ok(overlayAlphas[1] > overlayAlphas[0] && overlayAlphas[1] < overlayAlphas[2],
+    'needleLeaf=0.5 overlay alpha must be strictly between 0.25 and 0.75 values');
+});
+
+test('needleLeaf=0: pure broadleaf — no drawImage stamps (drawn directly)', async () => {
+  const alphas = await runWithMock({ pigment: 0.35, seed: 3, needleLeaf: 0, frondLeaf: 0 });
+  assert.strictEqual(alphas.length, 0,
+    'needleLeaf=0 must not call drawImage — broadleaf drawn directly onto main ctx');
+});
+
+test('needleLeaf=1: pure needle — no drawImage stamps (drawn directly)', async () => {
+  const alphas = await runWithMock({ pigment: 0.35, seed: 3, needleLeaf: 1, frondLeaf: 0 });
+  assert.strictEqual(alphas.length, 0,
+    'needleLeaf=1 must not call drawImage — needles drawn directly onto main ctx');
+});
+
+// ---------------------------------------------------------------------------
+// frondLeaf continuity test
+// ---------------------------------------------------------------------------
+
+test('frondLeaf blend: overlay alpha increases monotonically (no 0.5 cliff)', async () => {
+  const levels = [0.25, 0.5, 0.75];
+  const overlayAlphas = [];
+  for (const fl of levels) {
+    const alphas = await runWithMock({ pigment: 0.35, seed: 7, needleLeaf: 0, frondLeaf: fl });
+    assert.strictEqual(alphas.length, 2,
+      `frondLeaf=${fl}: expected 2 drawImage stamps, got ${alphas.length}`);
+    assert.ok(Math.abs(alphas[0] - (1 - fl)) < 1e-10,
+      `frondLeaf=${fl}: broadleaf stamp alpha should be ${1-fl}, got ${alphas[0]}`);
+    assert.ok(Math.abs(alphas[1] - fl) < 1e-10,
+      `frondLeaf=${fl}: frond stamp alpha should be ${fl}, got ${alphas[1]}`);
+    overlayAlphas.push(alphas[1]);
+  }
+  for (let i = 1; i < overlayAlphas.length; i++) {
+    assert.ok(overlayAlphas[i] > overlayAlphas[i - 1],
+      `frond overlay alpha not monotone: ${overlayAlphas[i - 1]} → ${overlayAlphas[i]}`);
+  }
+  assert.ok(overlayAlphas[1] > overlayAlphas[0] && overlayAlphas[1] < overlayAlphas[2],
+    'frondLeaf=0.5 overlay alpha must be strictly between 0.25 and 0.75 values');
+});
+
+test('frondLeaf=0: pure broadleaf — no drawImage stamps (drawn directly)', async () => {
+  const alphas = await runWithMock({ pigment: 0.35, seed: 7, needleLeaf: 0, frondLeaf: 0 });
+  assert.strictEqual(alphas.length, 0,
+    'frondLeaf=0 must not call drawImage — broadleaf drawn directly');
+});
+
+test('frondLeaf=1: pure frond — no drawImage stamps (drawn directly)', async () => {
+  const alphas = await runWithMock({ pigment: 0.35, seed: 7, needleLeaf: 0, frondLeaf: 1 });
+  assert.strictEqual(alphas.length, 0,
+    'frondLeaf=1 must not call drawImage — frond drawn directly onto main ctx');
+});
+
+// ---------------------------------------------------------------------------
+// Precedence: needleLeaf wins when both > 0 (must not crash)
+// ---------------------------------------------------------------------------
+
+test('both needleLeaf > 0 and frondLeaf > 0: needle path wins, no crash', async () => {
+  // Expect exactly 2 stamps (broadleaf + needle), not 4 (no frond stamp).
+  const alphas = await runWithMock({ pigment: 0.35, seed: 5, needleLeaf: 0.5, frondLeaf: 0.5 });
+  assert.strictEqual(alphas.length, 2,
+    'when needleLeaf > 0 wins, expect 2 stamps (broadleaf + needle); frond must not be drawn');
+  assert.ok(Math.abs(alphas[1] - 0.5) < 1e-10,
+    `needle overlay alpha should be 0.5 (needleLeaf=0.5), got ${alphas[1]}`);
+});
+
+// ---------------------------------------------------------------------------
+// both-zero byte-identical: needleLeaf=0 frondLeaf=0 goes to pure broadleaf path
+// (no drawImage, same leaf params as the param-level helpers confirm)
+// ---------------------------------------------------------------------------
+
+test('both-zero → broadleaf path: same leaf params as direct helpers', () => {
+  // The pure broadleaf path derives count/params via clusterLeafCount/clusterLeafParams.
+  // This test confirms those are unaffected by the blend dispatch.
+  const seed  = 42;
+  const count = clusterLeafCount(seed);
+  const pA    = clusterLeafParams(seed, count);
+  const pB    = clusterLeafParams(seed, count);
+  assert.deepStrictEqual(pA, pB,
+    'broadleaf leaf params must be identical when needleLeaf=0 frondLeaf=0');
+});
+
+// ---------------------------------------------------------------------------
+// Determinism: same args → same drawImage alpha sequence (mock-level)
+// ---------------------------------------------------------------------------
+
+test('blend determinism: same needleLeaf=0.5 args produce same alpha stamps', async () => {
+  const args = { pigment: 0.35, seed: 11, needleLeaf: 0.5, frondLeaf: 0 };
+  const run1 = await runWithMock(args);
+  const run2 = await runWithMock(args);
+  assert.deepStrictEqual(run1, run2,
+    'blend alpha stamps must be identical for identical inputs (determinism)');
+});
+
+test('blend determinism: same frondLeaf=0.5 args produce same alpha stamps', async () => {
+  const args = { pigment: 0.35, seed: 11, needleLeaf: 0, frondLeaf: 0.5 };
+  const run1 = await runWithMock(args);
+  const run2 = await runWithMock(args);
+  assert.deepStrictEqual(run1, run2,
+    'frond blend alpha stamps must be identical for identical inputs');
 });

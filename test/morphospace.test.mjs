@@ -62,7 +62,7 @@ const NEUTRAL_FILL = Object.freeze({
   branchAngle:  0.575,
   lengthRatio:  0.70,
   apicalBias:   0.5,
-  droopBias:    0.1,
+  droopBias:    0.0,
   pigment:      0.45,
   leafSize:     1.1,
   leafDensity:  1.0,
@@ -77,6 +77,21 @@ const NEUTRAL_FILL = Object.freeze({
   weep:         0.00,
   // trunkHeight=0.5 is the identity (1.0× scale); goldens stay valid.
   trunkHeight:  0.50,
+  // New inert genes (draws 40–42) — 0 = strict no-op
+  flatness:     0.00,
+  stemSpread:   0.00,
+  rosette:      0.00,
+  // New inert genes (draws 43–45) — identity defaults
+  woodiness:    1.00,
+  whorl:        0.00,
+  tipTuft:      0.00,
+  // New inert genes (draws 46–48) — identity defaults
+  needleLeaf:   0.00,
+  leafScale:    1.00,
+  frondLeaf:    0.00,
+  phototropism: 1.00,  // 1.0 = full phototropism (identity)
+  trunkTaper:   0.00,  // 0 = identity (trunk taper unchanged)
+  trunkRings:   0.00,  // 0 = identity (no ring banding — bark byte-identical)
   // taper is in FLORA_SCHEMA but NOT in the per-form table; fill with neutral
   taper:        0.50,
 });

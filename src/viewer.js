@@ -618,7 +618,11 @@ export function createViewer(canvas) {
       // -----------------------------------------------------------------------
       // 1. Branch geometry
       // -----------------------------------------------------------------------
-      const g = buildBranchGeometry(resolved.graph);
+      const g = buildBranchGeometry(resolved.graph, {
+        ribbing:  resolved.ribbing  ?? 0,
+        flatness: resolved.flatness ?? 0,
+        ribCount: resolved.ribCount ?? 10,
+      });
 
       // Dispose previous geometry to avoid GPU leaks (slider edits fire often).
       branchGeometry.dispose();
@@ -715,10 +719,11 @@ export function createViewer(canvas) {
       // lights and are handled below via sunLight + setSkyFromLightDir.
       // barkColor/barkPattern default-guarded in case the genome gene isn't wired yet.
       barkCtl.setGenome({
-        woodiness:   resolved.woodiness   ?? 0.88,
+        woodiness:   resolved.woodiness   ?? 1.0,
         pigment:     resolved.pigment,
         barkColor:   resolved.barkColor   ?? 1.0,
         barkPattern: resolved.barkPattern ?? 1.0,
+        trunkRings:  resolved.trunkRings  ?? 0,
       });
 
       // Align the procedural sky's sun with the scene light direction so the
@@ -774,6 +779,8 @@ export function createViewer(canvas) {
           leafTip:       resolved.leafTip       ?? 0.4,
           leafSerration: resolved.leafSerration ?? 0.0,
           leafLobing:    resolved.leafLobing    ?? 0.0,
+          needleLeaf:    resolved.needleLeaf    ?? 0,
+          frondLeaf:     resolved.frondLeaf     ?? 0,
         });
         if (texData !== null) {
           const tex = new THREE.CanvasTexture(texData.source);
@@ -816,6 +823,12 @@ export function createViewer(canvas) {
         const leafUniforms = realLeafPbrMaterial._customUniforms;
         if (leafUniforms && leafUniforms.uLightDir) {
           leafUniforms.uLightDir.value.copy(lightDirVec);
+        }
+        // uWeep: reduce canopy-sphere-normal blend for weeping willows so their
+        // sky-facing geometric normals (from foliage.js Parts A+B) drive diffuse.
+        // At weep=0 the factor is 0.8*(1-0)=0.8 — byte-identical to before.
+        if (leafUniforms && leafUniforms.uWeep !== undefined) {
+          leafUniforms.uWeep.value = resolved.genome ? (resolved.genome.weep ?? 0) : 0;
         }
       }
 

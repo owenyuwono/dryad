@@ -16,7 +16,8 @@
 //               used its hit point `p`.
 //
 // Genome uniforms:
-//   uWoodiness  float  ≈ 1 − succulence; tree ≈ 0.88 (reserved / future use)
+//   uWoodiness  float  1=woody bark (identity), 0=soft green herbaceous stem.
+//                      Blends albedo, roughness, and bump toward a green stem.
 //   uPigment    float  per-species hue gene 0–1 (reserved / future use)
 //
 // AO attribute:
@@ -28,7 +29,7 @@
 //   import { createBarkMaterial } from './barkMaterial.js';
 //   const bark = createBarkMaterial();
 //   branchMesh.material = bark.material;
-//   bark.setGenome({ woodiness: 0.88, pigment: 0.45 });
+//   bark.setGenome({ woodiness: 1.0, pigment: 0.45 });
 //   // later:
 //   bark.dispose();
 // =============================================================================
@@ -437,6 +438,7 @@ uniform float uWoodiness;
 uniform float uPigment;
 uniform float uBarkColor;
 uniform float uBarkPattern;
+uniform float uTrunkRings;
 `;
 
 // Replaces #include <map_fragment>.
@@ -469,13 +471,30 @@ float barkVEdge       = barkVoronoiEdge(barkPlateUV);
 
 // ---- Override diffuseColor with procedural bark albedo ----
 diffuseColor.rgb = barkAlbedo(barkPGrain, barkH, barkVEdge, vObjPos.y);
+// ---- Herbaceous blend: green soft stem at low uWoodiness ----
+// uWoodiness=1 → identity (exactly the bark albedo above).
+// uWoodiness=0 → green herbaceous stem colour, no bark texture.
+// barkH used as cheap within-stem shading variation (lighter ridges, darker base).
+vec3 herbAlbedo = mix(vec3(0.16, 0.34, 0.12), vec3(0.30, 0.52, 0.20), barkH);
+diffuseColor.rgb = mix(herbAlbedo, diffuseColor.rgb, uWoodiness);
+// ---- Horizontal leaf-scar ring banding (palm trunk rings) ----
+// Gated to thick trunk geometry via barkFeatureScale; twigs (thin xz radius) are unaffected.
+// ringProminence: 0 at identity (uTrunkRings=0) — bark byte-identical; positive activates bands.
+float ringProminence = uTrunkRings * step(0.06, barkFeatureScale);
+float ringMask = smoothstep(0.08, 0.02, fract(vObjPos.y * (4.0 + uTrunkRings * 8.0)));
+diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.7, ringMask * ringProminence * 0.55);
 `;
 
 // Replaces #include <normal_fragment_maps>.
 // `normal` is the working normal variable declared by three's normal_fragment_begin.
 // barkFeatureScale / barkPGrain are in scope from the map_fragment replacement above.
 const FRAG_NORMAL_REPLACEMENT = /* glsl */`
-normal = barkPerturbNormal(barkPGrain, normal, barkFeatureScale, barkFw);
+// Scale bark bump perturbation by uWoodiness so herbaceous stems are smooth.
+// uWoodiness=1 → full featureScale (identity bark bump).
+// uWoodiness=0 → featureScale approaches 0, barkPerturbNormal returns the
+//                 unperturbed world normal (smooth round stem).
+float scaledBarkFeature = barkFeatureScale * uWoodiness;
+normal = barkPerturbNormal(barkPGrain, normal, scaledBarkFeature, barkFw);
 // Toksvig-style roughness compensation: raise roughness where the shading normal
 // varies fast across the screen (high-normal-variance pixels) to suppress residual
 // specular aliasing.  Done HERE, not in the roughness chunk, because three's
@@ -496,6 +515,10 @@ float roughnessFactor = roughness;
 float barkRoughnessBase = mix(0.62, 0.92, uBarkPattern);
 float barkRoughnessRidge = mix(0.38, 0.55, uBarkPattern);
 roughnessFactor = mix(barkRoughnessBase, barkRoughnessRidge, barkH);
+// Herbaceous stems are soft/matte (rougher than polished bark ridges).
+// uWoodiness=1 → identity (bark roughness unchanged).
+// uWoodiness=0 → blend to 0.78 (flat herbaceous roughness).
+roughnessFactor = mix(0.78, roughnessFactor, uWoodiness);
 // NOTE: Toksvig roughness compensation (fwidth of the perturbed normal) is applied
 // in FRAG_NORMAL_REPLACEMENT, not here — the normal variable does not exist yet here.
 `;
@@ -529,10 +552,11 @@ reflectedLight.indirectDiffuse *= mix(1.0, vAo, 0.85);
 export function createBarkMaterial() {
     // Stable uniform refs — mutated by setGenome() without triggering recompile.
     const barkUniforms = {
-        uWoodiness:   { value: 0.88 },
+        uWoodiness:   { value: 1.0 },
         uPigment:     { value: 0.45 },
         uBarkColor:   { value: 1.00 },
         uBarkPattern: { value: 1.00 },
+        uTrunkRings:  { value: 0.00 },
     };
 
     const material = new THREE.MeshStandardMaterial({
@@ -544,7 +568,7 @@ export function createBarkMaterial() {
     // Stable cache key so three.js never recompiles this variant unnecessarily.
     // Bumped from 'bark-windskin' → 'bark-windskin-colorpattern' for the
     // barkColor/barkPattern uniform additions so stale cached programs are not reused.
-    material.customProgramCacheKey = () => 'bark-windskin-colorpattern';
+    material.customProgramCacheKey = () => 'bark-windskin-colorpattern-woody-rings';
 
     material.onBeforeCompile = (shader) => {
         // Merge our genome uniforms into the shader's uniform map.
@@ -628,16 +652,17 @@ export function createBarkMaterial() {
          * All parameters are optional; omitted ones keep their current value.
          *
          * @param {object} opts
-         * @param {number} [opts.woodiness]   reserved / future use
+         * @param {number} [opts.woodiness]   1=woody bark (identity), 0=green herbaceous stem
          * @param {number} [opts.pigment]     per-species hue gene 0–1
          * @param {number} [opts.barkColor]   0=birch/white, 1=dark brown; default 0.85
          * @param {number} [opts.barkPattern] 0=smooth+lenticels, 1=deep furrowed; default 0.80
          */
-        setGenome({ woodiness, pigment, barkColor, barkPattern } = {}) {
+        setGenome({ woodiness, pigment, barkColor, barkPattern, trunkRings } = {}) {
             if (woodiness   !== undefined) barkUniforms.uWoodiness.value   = woodiness;
             if (pigment     !== undefined) barkUniforms.uPigment.value     = pigment;
             if (barkColor   !== undefined) barkUniforms.uBarkColor.value   = barkColor;
             if (barkPattern !== undefined) barkUniforms.uBarkPattern.value = barkPattern;
+            if (trunkRings  !== undefined) barkUniforms.uTrunkRings.value  = trunkRings;
         },
 
         /**

@@ -53,7 +53,7 @@ function makeGenome(overrides = {}) {
     branchAngle:      0.575,
     lengthRatio:      0.70,
     apicalBias:       0.5,
-    droopBias:        0.10,
+    droopBias:        0.00,
     jitter:           0.5,
     structuralSeed:   1337,
     succulence:       0.20,
@@ -80,6 +80,21 @@ function makeGenome(overrides = {}) {
     weep:             0.00,
     // trunkHeight=0.5 is the identity (1.0× factor); golden canopy positions stay valid
     trunkHeight:      0.50,
+    // new inert genes (draws 40–42) — 0 = strict no-op
+    flatness:         0.00,
+    stemSpread:       0.00,
+    rosette:          0.00,
+    // new inert genes (draws 43–45) — identity defaults
+    woodiness:        1.00,
+    whorl:            0.00,
+    tipTuft:          0.00,
+    // new inert genes (draws 46–48) — identity defaults
+    needleLeaf:       0.00,
+    leafScale:        1.00,
+    frondLeaf:        0.00,
+    phototropism:     1.00,  // 1.0 = full phototropism (identity)
+    trunkTaper:       0.00,  // 0 = identity (draw 50)
+    trunkRings:       0.00,  // 0 = identity (no ring banding — draw 51)
     ...overrides,
   };
 }
@@ -293,39 +308,48 @@ const BUDGET_GENOMES = [
     branchiness: 1.0, branchFactorN: 1.0, tillering: 1.0,
     radialOrder: 0.0, apicalBias: 0.5,
     segmentation: 0.5, appendageBreadth: 0.5, appendageDensity: 0.5,
-    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.10,
+    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.00,
     jitter: 0.5, succulence: 0.20, stemGirth: 0.40, taper: 0.50,
     rigidity: 0.60, verticality: 0.50, ribbing: 0.05, spininess: 0.05,
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
     barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
+    woodiness: 1.00, whorl: 0.00, tipTuft: 0.00,
+    needleLeaf: 0.00, leafScale: 1.00, frondLeaf: 0.00,
+    phototropism: 1.00,
   },
   // Genome 1: radialOrder=0.5, apicalBias=0.3
   {
     branchiness: 1.0, branchFactorN: 1.0, tillering: 1.0,
     radialOrder: 0.5, apicalBias: 0.3,
     segmentation: 0.5, appendageBreadth: 0.5, appendageDensity: 0.5,
-    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.10,
+    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.00,
     jitter: 0.5, succulence: 0.20, stemGirth: 0.40, taper: 0.50,
     rigidity: 0.60, verticality: 0.50, ribbing: 0.05, spininess: 0.05,
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
     barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
+    woodiness: 1.00, whorl: 0.00, tipTuft: 0.00,
+    needleLeaf: 0.00, leafScale: 1.00, frondLeaf: 0.00,
+    phototropism: 1.00,
   },
   // Genome 2: radialOrder=1.0, apicalBias=0.8
   {
     branchiness: 1.0, branchFactorN: 1.0, tillering: 1.0,
     radialOrder: 1.0, apicalBias: 0.8,
     segmentation: 0.5, appendageBreadth: 0.5, appendageDensity: 0.5,
-    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.10,
+    branchAngle: 0.575, lengthRatio: 0.70, droopBias: 0.00,
     jitter: 0.5, succulence: 0.20, stemGirth: 0.40, taper: 0.50,
     rigidity: 0.60, verticality: 0.50, ribbing: 0.05, spininess: 0.05,
     pigment: 0.45, leafSize: 1.10, leafDensity: 1.00,
     rootCount: 0.45, rootDepth: 0.45, rootSpread: 0.50,
     rootFlare: 0.30, rootButtress: 0.15, rootBranchiness: 0.45, rootTaper: 0.50,
     barkColor: 0.85, barkPattern: 0.80, weep: 0.00, trunkHeight: 0.50,
+    woodiness: 1.00, whorl: 0.00, tipTuft: 0.00,
+    needleLeaf: 0.00, leafScale: 1.00, frondLeaf: 0.00,
+    phototropism: 1.00,
   },
 ];
 
@@ -575,6 +599,79 @@ test('§1.4 DRAW PURITY: rootRng draws are identical for same gene-floors, varyi
     assert.strictEqual(
       countRootRngDraws(gC1), countRootRngDraws(gC2),
       `seed=${seed}: same gene-floors, varying frac: draw counts must match`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// WOODINESS GATE: herbaceous plants produce zero root nodes
+// ---------------------------------------------------------------------------
+
+test('WOODINESS GATE: woodiness=0 (grass) produces zero root nodes', () => {
+  const env = makeEnv();
+  for (let seed = 0; seed < 20; seed++) {
+    const genome = makeGenome({ woodiness: 0.0, structuralSeed: seed * 13 + 7 });
+    const { graph } = resolve(genome, env);
+    const rootNodes = graph.nodes.filter(n => n.isRoot);
+    assert.strictEqual(
+      rootNodes.length, 0,
+      `seed=${seed}: woodiness=0 should produce 0 root nodes, got ${rootNodes.length}`
+    );
+  }
+});
+
+test('WOODINESS GATE: woodiness=0.05 (fern) produces zero root nodes', () => {
+  const env = makeEnv();
+  for (let seed = 0; seed < 10; seed++) {
+    const genome = makeGenome({ woodiness: 0.05, structuralSeed: seed * 7 + 3 });
+    const { graph } = resolve(genome, env);
+    const rootNodes = graph.nodes.filter(n => n.isRoot);
+    assert.strictEqual(
+      rootNodes.length, 0,
+      `seed=${seed}: woodiness=0.05 (fern) should produce 0 root nodes, got ${rootNodes.length}`
+    );
+  }
+});
+
+test('WOODINESS GATE: woodiness=0.10 (kelp) produces zero root nodes', () => {
+  const env = makeEnv();
+  for (let seed = 0; seed < 10; seed++) {
+    const genome = makeGenome({ woodiness: 0.10, structuralSeed: seed * 11 + 5 });
+    const { graph } = resolve(genome, env);
+    const rootNodes = graph.nodes.filter(n => n.isRoot);
+    assert.strictEqual(
+      rootNodes.length, 0,
+      `seed=${seed}: woodiness=0.10 (kelp) should produce 0 root nodes, got ${rootNodes.length}`
+    );
+  }
+});
+
+test('WOODINESS GATE: woodiness=0 is deterministic (same (genome, seed) twice → deep-equal)', () => {
+  const env = makeEnv();
+  for (let seed = 0; seed < 10; seed++) {
+    const genome = makeGenome({ woodiness: 0.0, structuralSeed: seed * 17 + 1 });
+    const r1 = resolve(genome, env);
+    const r2 = resolve(genome, env);
+    assert.deepStrictEqual(
+      r1.graph.nodes, r2.graph.nodes,
+      `seed=${seed}: woodiness=0 graph.nodes not deterministic`
+    );
+    assert.strictEqual(
+      r1.foliage.count, r2.foliage.count,
+      `seed=${seed}: woodiness=0 foliage.count not deterministic`
+    );
+  }
+});
+
+test('WOODINESS GATE: woodiness=1.0 (tree) still produces root nodes', () => {
+  const env = makeEnv();
+  for (let seed = 0; seed < 10; seed++) {
+    const genome = makeGenome({ woodiness: 1.0, structuralSeed: seed * 13 + 7 });
+    const { graph } = resolve(genome, env);
+    const rootNodes = graph.nodes.filter(n => n.isRoot);
+    assert.ok(
+      rootNodes.length > 0,
+      `seed=${seed}: woodiness=1.0 should produce root nodes, got 0`
     );
   }
 });

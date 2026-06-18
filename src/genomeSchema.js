@@ -106,6 +106,36 @@ export const FLORA_SCHEMA = Object.freeze({
     range: Object.freeze([0, 1]),
   }),
 
+  /**
+   * Lateral spread of tillering stem bases; 0 = no-op (identity), 1 = maximally splayed.
+   * Structural tier — consumed by skeleton.js (not yet wired). Draw 41.
+   */
+  stemSpread: Object.freeze({
+    tier: 'structural',
+    kind: 'continuous',
+    range: Object.freeze([0, 1]),
+  }),
+
+  /**
+   * Apical whorl rosette prominence; 0 = no-op (identity), 1 = full apical whorl.
+   * Structural tier — consumed by skeleton.js (not yet wired). Draw 42.
+   */
+  rosette: Object.freeze({
+    tier: 'structural',
+    kind: 'continuous',
+    range: Object.freeze([0, 1]),
+  }),
+
+  /**
+   * Whorled branching pattern intensity; 0 = no-op, 1 = full whorled arrangement.
+   * Structural tier — no consumer wired yet. Draw 44. IDENTITY DEFAULT = 0.
+   */
+  whorl: Object.freeze({
+    tier: 'structural',
+    kind: 'continuous',
+    range: Object.freeze([0, 1]),
+  }),
+
   // -------------------------------------------------------------------------
   // PROPORTIONS TIER — shape
   // -------------------------------------------------------------------------
@@ -192,6 +222,60 @@ export const FLORA_SCHEMA = Object.freeze({
    * Consumed by solveProportions — NOT returned by resolve(). Draw 38.
    */
   weep: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Cross-section flatness (oval squash) of branch tubes; 0 = no-op (circular), 1 = maximally flat.
+   * Proportions tier — consumed by branchMesh.js (not yet wired). Draw 40.
+   */
+  flatness: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Woodiness: degree of lignification; 1.0 = fully woody (today's default), 0 = herbaceous.
+   * Proportions tier — no consumer wired yet. Draw 43. IDENTITY DEFAULT = 1.0.
+   */
+  woodiness: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Tip tuft: apical leaf/spine concentration at branch tips; 0 = no-op, 1 = full tip tuft.
+   * Proportions tier — no consumer wired yet. Draw 45. IDENTITY DEFAULT = 0.
+   */
+  tipTuft: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Phototropism scale: how strongly terminals rotate toward the sun direction.
+   * 1.0 = full phototropism (today's default, identity). 0.0 = no sun-lean (fronds stay at
+   * their skeleton azimuths — fixes the palm crown-gap). Draw 49.
+   * IDENTITY DEFAULT = 1.0 → photoAngle unchanged → existing trees byte-identical.
+   */
+  phototropism: Object.freeze({
+    tier: 'proportions',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Trunk-taper override: blends the trunk-only (branchLevel 0) per-segment taper
+   * toward 1.0 (cylindrical). 0 = identity (current taper behaviour); 1 = perfectly
+   * cylindrical trunk (top radius ≈ base radius). Draw 50.
+   * IDENTITY DEFAULT = 0 → trunk radii byte-identical to pre-gene output.
+   */
+  trunkTaper: Object.freeze({
     tier: 'proportions',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),
@@ -294,6 +378,47 @@ export const FLORA_SCHEMA = Object.freeze({
    * Cosmetic only — barkMaterial consumer. Draw 37.
    */
   barkPattern: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Needle-leaf morphology: 0 = no-op (broad leaf), 1 = needle-like leaf shape.
+   * Cosmetic only — no consumer wired yet. Draw 46. IDENTITY DEFAULT = 0.
+   */
+  needleLeaf: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf cluster scale multiplier; 1.0 = identity (no change), 3.0 = 3× scale.
+   * Cosmetic only — no consumer wired yet. Draw 47. IDENTITY DEFAULT = 1.0.
+   */
+  leafScale: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([1.0, 3.0]),
+  }),
+
+  /**
+   * Frond-leaf morphology: 0 = no-op (current broadleaf sprite), 1 = palm-frond leaf sprite.
+   * Cosmetic only — no consumer wired yet. Draw 48. IDENTITY DEFAULT = 0.
+   */
+  frondLeaf: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Horizontal leaf-scar ring banding on palm trunks; 0 = no-op (identity — current bark),
+   * 1 = fully visible ring bands. Cosmetic only — barkMaterial consumer. Draw 51.
+   * IDENTITY DEFAULT = 0 → bark byte-identical to pre-gene output.
+   */
+  trunkRings: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),

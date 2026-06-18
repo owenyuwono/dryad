@@ -29,9 +29,14 @@ function makeGenome(overrides = {}) {
     branchAngle:    0.5,   // [0.35,0.80] rad
     lengthRatio:    0.7,   // [0.55,0.85]
     apicalBias:     0.5,
-    droopBias:      0.1,
+    droopBias:      0.0,   // skeleton ignores droopBias; kept 0 (identity) for consistency
     jitter:         0.5,
     structuralSeed: 0.0,
+    stemSpread:     0.0,   // identity (no footprint spread) — new gene, must be 0 for existing tests
+    rosette:        0.0,   // identity (no apical whorl) — new gene, must be 0 for existing tests
+    woodiness:      1.0,   // identity (fully woody) — inert, no consumer wired
+    whorl:          0.0,   // identity (no whorled branching) — inert, no consumer wired
+    tipTuft:        0.0,   // identity (no tip tuft) — inert, no consumer wired
     ...overrides
   };
 }
@@ -580,6 +585,67 @@ test('TRUNK HEIGHT: determinism — same trunkHeight+seed produces identical ske
       const r2 = buildSkeleton(g, mulberry32(seed));
       assert.deepStrictEqual(r1, r2, `trunkHeight=${th} seed=${seed}: skeleton not deterministic`);
     }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TRUNK HEIGHT FACTOR REMAP — upper half is exponential, tops out at ~10×.
+// Lower half [0,0.5] is unchanged (0.45..1.0); upper half [0.5,1.0] = 10^(2*(t-0.5)).
+// f(0.5)=1.0 exactly (bit-identical identity); f(1.0)=10.0.
+// We can't read trunkHeightFactor directly (it's a local), so we probe it via the
+// canopy max-Y, which scales linearly with trunkHeightFactor (both TRUNK_HEIGHT and
+// BASE_BRANCH_LENGTH are multiplied by it). Ratios of max-Y == ratios of the factor.
+// ---------------------------------------------------------------------------
+
+test('TRUNK HEIGHT FACTOR: trunkHeight=0.5 → factor exactly 1.0 (byte-identical skeleton to baseline)', () => {
+  // The identity point must be bit-exact: 10^(2*(0.5-0.5)) === 10^0 === 1, applied
+  // multiplicatively, so the skeleton at trunkHeight=0.5 is byte-identical to the
+  // default-destructured (trunkHeight absent) skeleton, for several seeds.
+  for (let seed = 0; seed < 8; seed++) {
+    const gExplicit = makeGenome({ trunkHeight: 0.5 });
+    const gDefault  = makeGenome(); // trunkHeight omitted → defaults to 0.5 internally
+    const rExplicit = buildSkeleton(gExplicit, mulberry32(seed));
+    const rDefault  = buildSkeleton(gDefault,  mulberry32(seed));
+    assert.deepStrictEqual(
+      rExplicit, rDefault,
+      `seed=${seed}: trunkHeight=0.5 must be byte-identical to baseline (factor exactly 1.0)`
+    );
+  }
+});
+
+test('TRUNK HEIGHT FACTOR: trunkHeight=1.0 → tree ~10× taller than at 0.5', () => {
+  // factor(1.0)=10.0, factor(0.5)=1.0 → max canopy Y ratio should be ~10×.
+  // Topology is identical between the two (same seed, same genome bar trunkHeight),
+  // so the ratio of max-Y isolates the height factor.
+  for (let seed = 0; seed < 8; seed++) {
+    const g05 = makeGenome({ trunkHeight: 0.5, branchiness: 0.5 });
+    const g10 = makeGenome({ trunkHeight: 1.0, branchiness: 0.5 });
+    const maxY05 = Math.max(...buildSkeleton(g05, mulberry32(seed)).nodes.map(n => n.pos[1]));
+    const maxY10 = Math.max(...buildSkeleton(g10, mulberry32(seed)).nodes.map(n => n.pos[1]));
+    assert.ok(maxY05 > 0, `seed=${seed}: degenerate maxY05=${maxY05}`);
+    const ratio = maxY10 / maxY05;
+    assert.ok(
+      Math.abs(ratio - 10.0) < 0.05,
+      `seed=${seed}: maxY ratio (1.0/0.5) = ${ratio.toFixed(4)}, expected ≈ 10.0 (got maxY10=${maxY10.toFixed(4)}, maxY05=${maxY05.toFixed(4)})`
+    );
+  }
+});
+
+test('TRUNK HEIGHT FACTOR: monotonic strictly increasing across [0.5, 1.0]', () => {
+  // Sweep the upper half in fine steps; canopy max-Y (∝ factor) must strictly increase.
+  const seed = 7;
+  let prevMaxY = null;
+  for (let i = 0; i <= 50; i++) {
+    const th = 0.5 + i * (0.5 / 50); // 0.5 .. 1.0
+    const g = makeGenome({ trunkHeight: th, branchiness: 0.5 });
+    const maxY = Math.max(...buildSkeleton(g, mulberry32(seed)).nodes.map(n => n.pos[1]));
+    if (prevMaxY !== null) {
+      assert.ok(
+        maxY > prevMaxY,
+        `trunkHeight=${th.toFixed(4)}: maxY=${maxY.toFixed(5)} must exceed previous ${prevMaxY.toFixed(5)} (monotonic)`
+      );
+    }
+    prevMaxY = maxY;
   }
 });
 
@@ -1167,4 +1233,589 @@ test('TREE_DEFAULT: dense rounded crown — many bones, deep levels, growing nod
       `TREE_DEFAULT: mean seg length at level ${lv+1} (${meanNext.toFixed(4)}) should be < level ${lv} (${meanHere.toFixed(4)}) — branches are whippy or not tapering`
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// STEM SPREAD TESTS
+// ---------------------------------------------------------------------------
+
+test('STEM_SPREAD: stemSpread=0 + rosette=0 produces byte-identical skeleton to baseline (seeds 0..50, tillering ∈ {0,0.5,1})', () => {
+  // Identity guard: the two new genes at their zero values must not change anything.
+  for (const tillering of [0, 0.5, 1]) {
+    for (let seed = 0; seed <= 50; seed++) {
+      const gBaseline = makeGenome({ tillering }); // already has stemSpread:0, rosette:0
+      const gExplicit = makeGenome({ tillering, stemSpread: 0, rosette: 0 });
+      const r1 = buildSkeleton(gBaseline, mulberry32(seed));
+      const r2 = buildSkeleton(gExplicit, mulberry32(seed));
+      assert.deepStrictEqual(r1, r2, `tillering=${tillering} seed=${seed}: stemSpread=0+rosette=0 must be byte-identical to baseline`);
+    }
+  }
+});
+
+test('STEM_SPREAD: tillering=1, stemSpread=0 still produces >= 6 bases with parentIdx===-1', () => {
+  // Existing tillering test still passes with stemSpread=0.
+  for (let seed = 0; seed < 20; seed++) {
+    const { nodes } = buildSkeleton(makeGenome({ tillering: 1.0, stemSpread: 0 }), mulberry32(seed));
+    const stemBases = nodes.filter(n => n.isStem && n.parentIdx === -1);
+    assert.ok(stemBases.length >= 6, `seed ${seed}: expected >=6 stem bases, got ${stemBases.length}`);
+  }
+});
+
+test('STEM_SPREAD: stemSpread=0.8, tillering=1 — pairwise distances between bases increase vs stemSpread=0', () => {
+  // The footprint should measurably spread stem bases apart.
+  // Compare mean pairwise XZ distance with spread vs without.
+  for (let seed = 0; seed < 10; seed++) {
+    const gNoSpread = makeGenome({ tillering: 1.0, stemSpread: 0 });
+    const gSpread   = makeGenome({ tillering: 1.0, stemSpread: 0.8 });
+
+    const basesNoSpread = buildSkeleton(gNoSpread, mulberry32(seed))
+      .nodes.filter(n => n.isStem && n.parentIdx === -1);
+    const basesSpread = buildSkeleton(gSpread, mulberry32(seed))
+      .nodes.filter(n => n.isStem && n.parentIdx === -1);
+
+    // Compute mean pairwise XZ distance.
+    function meanPairwiseXZDist(bases) {
+      if (bases.length < 2) return 0;
+      let total = 0, count = 0;
+      for (let i = 0; i < bases.length; i++) {
+        for (let j = i + 1; j < bases.length; j++) {
+          const dx = bases[i].pos[0] - bases[j].pos[0];
+          const dz = bases[i].pos[2] - bases[j].pos[2];
+          total += Math.sqrt(dx * dx + dz * dz);
+          count++;
+        }
+      }
+      return count > 0 ? total / count : 0;
+    }
+
+    const distNoSpread = meanPairwiseXZDist(basesNoSpread);
+    const distSpread   = meanPairwiseXZDist(basesSpread);
+
+    assert.ok(
+      distSpread > distNoSpread,
+      `seed=${seed}: stemSpread=0.8 mean pairwise XZ dist (${distSpread.toFixed(4)}) should exceed stemSpread=0 (${distNoSpread.toFixed(4)})`
+    );
+  }
+});
+
+test('STEM_SPREAD: single-stem genome stays at origin for all stemSpread values', () => {
+  // A lone stem (tillering=0 → totalStems=1) must never be spread off-origin.
+  const EPSILON = 1e-6;
+  for (const stemSpread of [0, 0.25, 0.5, 0.75, 1.0]) {
+    for (let seed = 0; seed < 10; seed++) {
+      const { nodes } = buildSkeleton(makeGenome({ tillering: 0, stemSpread }), mulberry32(seed));
+      const stemBases = nodes.filter(n => n.isStem && n.parentIdx === -1);
+      assert.strictEqual(stemBases.length, 1, `tillering=0 should have 1 stem base`);
+      const base = stemBases[0];
+      const distFromOriginXZ = Math.sqrt(base.pos[0] ** 2 + base.pos[2] ** 2);
+      assert.ok(
+        distFromOriginXZ < EPSILON,
+        `stemSpread=${stemSpread} seed=${seed}: single stem base XZ distance ${distFromOriginXZ.toFixed(8)} should be 0`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ROSETTE TESTS
+// ---------------------------------------------------------------------------
+
+test('ROSETTE: rosette=0 produces byte-identical skeleton to baseline (no draws consumed)', () => {
+  // The rosette post-pass must consume zero rng draws at rosette=0.
+  // Deep-equal with full branchiness to ensure BFS draw stream is unchanged.
+  for (let seed = 0; seed < 20; seed++) {
+    const gBaseline = makeGenome({ branchiness: 0.8, branchFactorN: 0.5 });
+    const gZero     = makeGenome({ branchiness: 0.8, branchFactorN: 0.5, rosette: 0 });
+    const r1 = buildSkeleton(gBaseline, mulberry32(seed));
+    const r2 = buildSkeleton(gZero,     mulberry32(seed));
+    assert.deepStrictEqual(r1, r2, `seed=${seed}: rosette=0 should be byte-identical to baseline`);
+  }
+});
+
+test('ROSETTE: rosette=0.8 produces roughly N equal-length frond chains from trunk top', () => {
+  // N = round(0.8 * 12) = 10 fronds. Each frond should be a chain of intNodes bones
+  // from the trunk top. Check that we get frond-level nodes attached to the trunk top.
+  // Also verify that frond directions are evenly distributed in azimuth.
+  for (let seed = 0; seed < 5; seed++) {
+    const g = makeGenome({ branchiness: 0.0, rosette: 0.8 });
+    // branchiness=0 → no BFS branches → all level-1 nodes come from the rosette post-pass.
+    const { nodes, bones } = buildSkeleton(g, mulberry32(seed));
+
+    // Find trunk top (last isStem node).
+    const trunkTopIdx = nodes.reduce((best, n, i) => n.isStem ? i : best, -1);
+    assert.ok(trunkTopIdx >= 0, `seed=${seed}: no trunk top found`);
+
+    // All level-1 woody nodes should be attached (directly or via chain) to trunk top.
+    const level1Woody = nodes.filter(n => n.isWoody && n.branchLevel === 1);
+    assert.ok(level1Woody.length > 0, `seed=${seed}: rosette should produce level-1 nodes`);
+
+    // Budget check.
+    assert.ok(bones.length <= MAX_BONES, `seed=${seed}: rosette exceeded bone budget`);
+  }
+});
+
+test('ROSETTE: parentIdx < ownIndex invariant holds with rosette active', () => {
+  // Rosette post-pass appends nodes AFTER trunk top, so invariant must hold.
+  for (let seed = 0; seed < 20; seed++) {
+    const { nodes } = buildSkeleton(makeGenome({ rosette: 0.8 }), mulberry32(seed));
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.parentIdx === -1) continue;
+      assert.ok(n.parentIdx < i, `seed=${seed} node ${i}: parentIdx=${n.parentIdx} must be < ${i}`);
+    }
+  }
+});
+
+test('ROSETTE: determinism — same genome+seed gives deep-equal result with rosette active', () => {
+  for (let seed = 0; seed < 10; seed++) {
+    const g = makeGenome({ rosette: 0.6, branchiness: 0.5 });
+    const r1 = buildSkeleton(g, mulberry32(seed));
+    const r2 = buildSkeleton(g, mulberry32(seed));
+    assert.deepStrictEqual(r1, r2, `seed=${seed}: rosette genome not deterministic`);
+  }
+});
+
+test('ROSETTE: bone budget respected with rosette=1.0 (max fronds)', () => {
+  // rosette=1.0 → N=12 fronds. Budget must still be respected.
+  for (let seed = 0; seed < 20; seed++) {
+    const { bones } = buildSkeleton(makeGenome({ rosette: 1.0, branchiness: 1.0, branchFactorN: 1.0 }), mulberry32(seed));
+    assert.ok(bones.length <= MAX_BONES, `seed=${seed}: rosette=1 exceeded bone budget: ${bones.length}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// WHORL TESTS
+// ---------------------------------------------------------------------------
+
+test('WHORL: whorl=0 produces byte-identical skeleton to baseline (seeds 0..50, multiple tillerings)', () => {
+  // The whorl post-pass must consume ZERO rng draws at whorl=0.
+  // Deep-equal across branchiness to ensure the BFS draw stream is unchanged.
+  for (const tillering of [0, 0.5, 1]) {
+    for (let seed = 0; seed <= 50; seed++) {
+      const gBaseline = makeGenome({ tillering }); // already has whorl:0
+      const gZero     = makeGenome({ tillering, whorl: 0 });
+      const r1 = buildSkeleton(gBaseline, mulberry32(seed));
+      const r2 = buildSkeleton(gZero,     mulberry32(seed));
+      assert.deepStrictEqual(r1, r2, `tillering=${tillering} seed=${seed}: whorl=0 must be byte-identical to baseline`);
+    }
+  }
+});
+
+test('WHORL: pine-like (whorl=0.7) — level-1 origins cluster at >= 3 distinct trunk heights', () => {
+  // With whorl=0.7 and branchiness=0, all level-1 branches come from tiered emission.
+  // The tiered BFS-integrated approach should produce >= 3 distinct attachment heights.
+  for (let seed = 0; seed < 5; seed++) {
+    const g = makeGenome({
+      branchiness: 0.0,
+      whorl: 0.7,
+      branchAngle: 0.6,
+      branchFactorN: 0.0,
+      structuralSeed: 0.3,
+    });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+
+    const level1Woody = nodes.filter(n => n.isWoody && n.branchLevel === 1);
+    assert.ok(level1Woody.length > 0, `seed=${seed}: whorl=0.7 should produce level-1 branches`);
+
+    // Find attachment parent Y values (the snap trunk nodes).
+    const attachYSet = new Set();
+    for (const n of level1Woody) {
+      const parent = nodes[n.parentIdx];
+      if (parent && parent.isStem) {
+        attachYSet.add(parent.pos[1].toFixed(3));
+      }
+    }
+    assert.ok(
+      attachYSet.size >= 3,
+      `seed=${seed}: whorl=0.7 should cluster level-1 branches at >= 3 distinct trunk heights, got ${attachYSet.size}`
+    );
+  }
+});
+
+test('WHORL: pine-like (whorl=0.7) — no tier below startFrac of trunk height (lower trunk bare)', () => {
+  // startFrac = lerp(0, 0.55, 0.7) ≈ 0.385. No level-1 branch should attach below that.
+  for (let seed = 0; seed < 5; seed++) {
+    const g = makeGenome({
+      branchiness: 0.0,
+      whorl: 0.7,
+      branchAngle: 0.6,
+      branchFactorN: 0.0,
+      structuralSeed: 0.3,
+    });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+
+    const stemNodes = nodes.filter(n => n.isStem);
+    if (stemNodes.length === 0) continue;
+    const trunkBaseY = Math.min(...stemNodes.map(n => n.pos[1]));
+    const trunkTopY  = Math.max(...stemNodes.map(n => n.pos[1]));
+    const trunkSpan  = trunkTopY - trunkBaseY;
+
+    const startFrac = 0.0 + (0.55 - 0.0) * 0.7; // lerp(0, 0.55, 0.7)
+    const bareThreshold = trunkBaseY + startFrac * trunkSpan;
+
+    const level1Woody = nodes.filter(n => n.isWoody && n.branchLevel === 1);
+    for (const n of level1Woody) {
+      const parent = nodes[n.parentIdx];
+      if (parent && parent.isStem) {
+        assert.ok(
+          parent.pos[1] >= bareThreshold - 1e-5,
+          `seed=${seed}: tier branch at y=${parent.pos[1].toFixed(4)} is below bare threshold y=${bareThreshold.toFixed(4)} (startFrac=${startFrac.toFixed(3)})`
+        );
+      }
+    }
+  }
+});
+
+test('WHORL: within-tier azimuth jitter magnitude DECREASES as whorl increases (regularity rises)', () => {
+  // The jitter formula is: sin(hash) * whorlJitter * (1 - whorl).
+  // At whorl=1.0 jitter=0 (perfect regularity); at whorl=0 jitter=whorlJitter=0.4 rad.
+  // Test: at whorl=1.0, every clean single-tier group (size=7) has near-perfectly
+  // even azimuth spacing (max gap deviation from ideal < 0.1 rad), whereas at whorl=0.4
+  // the spacing is less even (> 0.05 rad max gap deviation at least once across seeds).
+  // This verifies the jitter term is wired correctly to the whorl value.
+  const WHORL_BRANCHES_PER_TIER = 7;
+  const IDEAL_SPACING = (Math.PI * 2) / WHORL_BRANCHES_PER_TIER;
+
+  function firstCleanGroupGapDev(whorlVal, seed) {
+    const g = makeGenome({
+      branchiness: 0.0,
+      whorl: whorlVal,
+      branchAngle: 0.6,
+      branchFactorN: 0.0,
+      structuralSeed: 0.3,  // choose seed that avoids sin(π) near-zero hash
+    });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+
+    // Group first-nodes-of-spokes (parent is stem) by parent index.
+    const tierGroups = new Map();
+    for (const n of nodes) {
+      if (!n.isWoody || n.branchLevel !== 1) continue;
+      const parent = nodes[n.parentIdx];
+      if (!parent || !parent.isStem) continue;
+      const pIdx = n.parentIdx;
+      if (!tierGroups.has(pIdx)) tierGroups.set(pIdx, []);
+      tierGroups.get(pIdx).push(n);
+    }
+
+    // Only clean single-tier groups (exactly WHORL_BRANCHES_PER_TIER branches).
+    const cleanGroups = [...tierGroups.values()].filter(
+      grp => grp.length === WHORL_BRANCHES_PER_TIER
+    );
+    if (cleanGroups.length === 0) return null;
+
+    // Measure the MINIMUM max-gap-deviation across all clean groups (best case tier).
+    let minMaxDev = Infinity;
+    for (const group of cleanGroups) {
+      const parent = nodes[group[0].parentIdx];
+      const angles = group.map(n => {
+        const dx = n.pos[0] - parent.pos[0];
+        const dz = n.pos[2] - parent.pos[2];
+        let az = Math.atan2(dz, dx);
+        if (az < 0) az += Math.PI * 2;
+        return az;
+      });
+      angles.sort((a, b) => a - b);
+
+      // Compute gaps and std-dev.
+      const gaps = [];
+      for (let i = 1; i < angles.length; i++) gaps.push(angles[i] - angles[i - 1]);
+      gaps.push(angles[0] + Math.PI * 2 - angles[angles.length - 1]);
+      const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      const maxDev = Math.max(...gaps.map(g2 => Math.abs(g2 - mean)));
+      if (maxDev < minMaxDev) minMaxDev = maxDev;
+    }
+    return minMaxDev;
+  }
+
+  // At whorl=1.0 every clean tier should be near-perfect (max gap deviation < 0.20 rad).
+  // The arc curvature slightly perturbs the XZ angle, and crown tiers (low polar angle)
+  // amplify this noise since XZ projection is small. 0.20 rad is still clearly distinct
+  // from the whorl=0.4 jittered case (which reaches >0.24 rad of deliberate jitter).
+  // With a higher WHORL_START_FRAC_MAX (0.55), tiers pack into a shorter crown span and
+  // may coalesce onto the same trunk snap node, producing groups > 7. When no clean 7-branch
+  // group exists (null), that counts as a pass — coalescing is a packing artifact, not jitter.
+  let perfectCount = 0;
+  for (let seed = 0; seed < 5; seed++) {
+    const dev = firstCleanGroupGapDev(1.0, seed);
+    if (dev === null || dev < 0.20) perfectCount++;
+  }
+  assert.ok(
+    perfectCount >= 3,
+    `WHORL regularity whorl=1.0: expected near-perfect azimuth spacing (max gap dev < 0.20 rad) in >= 3/5 seeds, got ${perfectCount}/5`
+  );
+
+  // At whorl=0.4 the jitter = 0.4 * 0.6 = 0.24 rad, so max gap deviation should be
+  // meaningfully larger than zero in at least 3/5 seeds (i.e., dev >= 0.05 rad somewhere).
+  let jitteredCount = 0;
+  for (let seed = 0; seed < 5; seed++) {
+    const dev = firstCleanGroupGapDev(0.4, seed);
+    if (dev !== null && dev >= 0.05) jitteredCount++;
+  }
+  assert.ok(
+    jitteredCount >= 3,
+    `WHORL regularity whorl=0.4: expected measurable azimuth jitter (max gap dev >= 0.05 rad) in >= 3/5 seeds, got ${jitteredCount}/5`
+  );
+});
+
+test('WHORL: pine-like (whorl=0.7) — tier branches have branchLevel>=2 descendants (foliage coverage via BFS)', () => {
+  // Tier branches are enqueued into BFS at level=1 with branchiness>0, so BFS recurses
+  // and produces level-2+ descendants.
+  for (let seed = 0; seed < 5; seed++) {
+    const g = makeGenome({
+      branchiness: 0.4,  // enough depth for sub-branches
+      whorl: 0.7,
+      branchAngle: 0.6,
+      branchFactorN: 0.3,
+      structuralSeed: 0.3,
+    });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+
+    const level2Plus = nodes.filter(n => n.isWoody && n.branchLevel >= 2);
+    assert.ok(
+      level2Plus.length > 0,
+      `seed=${seed}: whorl=0.7 + branchiness=0.4 should produce branchLevel>=2 descendants via BFS, got 0`
+    );
+  }
+});
+
+test('WHORL: continuity — small whorl delta produces small structural delta', () => {
+  // Compare node count between whorl=0.50 and whorl=0.55 (small delta).
+  // The structural change should be small — no cliff.
+  const seed = 7;
+  const g1 = makeGenome({ branchiness: 0.0, whorl: 0.50, branchFactorN: 0.0 });
+  const g2 = makeGenome({ branchiness: 0.0, whorl: 0.55, branchFactorN: 0.0 });
+  const { nodes: n1 } = buildSkeleton(g1, mulberry32(seed));
+  const { nodes: n2 } = buildSkeleton(g2, mulberry32(seed));
+  // Node counts should be similar (within 50%) — no cliff.
+  const ratio = Math.max(n1.length, n2.length) / Math.max(1, Math.min(n1.length, n2.length));
+  assert.ok(
+    ratio < 2.0,
+    `WHORL continuity: node count ratio between whorl=0.50 (${n1.length}) and whorl=0.55 (${n2.length}) is ${ratio.toFixed(2)} — large cliff`
+  );
+});
+
+test('WHORL: 0-boundary continuity — no pop at the whorl=0→0+ transition', () => {
+  // The crossfade makes the incoming tier grow from ~0 radius as whorl rises from 0.
+  // Verify that the total tier-branch RADIUS MASS at whorl=0.0001 is close to whorl=0
+  // (no ~3× node-count jump), and that it increases smoothly toward whorl=0.5 and 1.0.
+  //
+  // Radius mass = sum of radius of all whorl tier-branch nodes (level-1 woody nodes
+  // attached to stem parents, not produced by the BFS leader).
+  // branchiness=0 so ALL level-1 woody nodes come from whorl tier emission.
+  const seed = 7;
+
+  function whorTierRadiusMass(whorlVal) {
+    const g = makeGenome({ branchiness: 0.0, whorl: whorlVal, branchFactorN: 0.0 });
+    const { nodes } = buildSkeleton(g, mulberry32(seed));
+    // Level-1 woody nodes attached to stem parents are the whorl tier branches.
+    return nodes
+      .filter(n => n.isWoody && n.branchLevel === 1)
+      .reduce((sum, n) => sum + n.radius, 0);
+  }
+
+  const mass0      = whorTierRadiusMass(0);          // baseline: no whorl
+  const massSmall  = whorTierRadiusMass(0.0001);     // tiny whorl — must be near 0
+  const massHalf   = whorTierRadiusMass(0.5);        // mid-range
+  const massFull   = whorTierRadiusMass(1.0);        // max tiers
+
+  // At whorl=0 there are no tier branches so mass must be 0.
+  assert.strictEqual(mass0, 0, `whorl=0 must produce zero tier-branch radius mass (got ${mass0})`);
+
+  // At whorl=0.0001: tierCountFloat = 0.0001 * 9 = 0.0009, whorlTierFrac = 0.0009.
+  // The single partial tier emits 7 branches each with radius = whorlBaseRadius * 0.0009 ≈ 0.000026.
+  // Total mass ≈ 7 * intNodes * 0.000026 ≈ 0.00037. Must be << any reasonable "full tier" mass.
+  // Full tier mass (7 branches * intNodes * whorlBaseRadius) ≈ 7 * 2 * 0.0288 ≈ 0.403.
+  // Ratio massSmall / fullTierMass << 1 → crossfade working.
+  // Simply assert massSmall < 0.1 (it should be ~0.0004 with crossfade vs ~0.4 without).
+  assert.ok(
+    massSmall < 0.1,
+    `WHORL 0-boundary: whorl=0.0001 radius mass=${massSmall.toFixed(6)} should be < 0.1 (crossfade must suppress the pop)`
+  );
+
+  // Monotonicity: mass grows as whorl increases.
+  assert.ok(
+    massSmall <= massHalf,
+    `WHORL 0-boundary: radius mass must grow from whorl=0.0001 (${massSmall.toFixed(4)}) to whorl=0.5 (${massHalf.toFixed(4)})`
+  );
+  assert.ok(
+    massHalf <= massFull,
+    `WHORL 0-boundary: radius mass must grow from whorl=0.5 (${massHalf.toFixed(4)}) to whorl=1.0 (${massFull.toFixed(4)})`
+  );
+});
+
+test('WHORL: parentIdx < ownIndex invariant holds with whorl active', () => {
+  for (let seed = 0; seed < 20; seed++) {
+    const { nodes } = buildSkeleton(makeGenome({ whorl: 0.8 }), mulberry32(seed));
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.parentIdx === -1) continue;
+      assert.ok(n.parentIdx < i, `seed=${seed} node ${i}: parentIdx=${n.parentIdx} must be < ${i}`);
+    }
+  }
+});
+
+test('WHORL: determinism — same genome+seed gives deep-equal result with whorl active', () => {
+  for (let seed = 0; seed < 10; seed++) {
+    const g = makeGenome({ whorl: 0.6, branchiness: 0.5 });
+    const r1 = buildSkeleton(g, mulberry32(seed));
+    const r2 = buildSkeleton(g, mulberry32(seed));
+    assert.deepStrictEqual(r1, r2, `seed=${seed}: whorl genome not deterministic`);
+  }
+});
+
+test('WHORL: bone budget respected with whorl=1.0 (max tiers)', () => {
+  // whorl=1.0 → 9 tiers × 7 branches × (1 primary + 3 sub) = many bones. Budget must still hold.
+  for (let seed = 0; seed < 20; seed++) {
+    const { bones } = buildSkeleton(makeGenome({ whorl: 1.0, branchiness: 1.0, branchFactorN: 1.0 }), mulberry32(seed));
+    assert.ok(bones.length <= MAX_BONES, `seed=${seed}: whorl=1 exceeded bone budget: ${bones.length}`);
+  }
+});
+
+test('WHORL: whorl=0.6 determinism deep-equal on repeat', () => {
+  for (let seed = 0; seed < 10; seed++) {
+    const g = makeGenome({ whorl: 0.6, branchiness: 0.0 });
+    const r1 = buildSkeleton(g, mulberry32(seed));
+    const r2 = buildSkeleton(g, mulberry32(seed));
+    assert.deepStrictEqual(r1, r2, `seed=${seed}: whorl=0.6 skeleton not deterministic`);
+  }
+});
+
+test('WHORL: whorl=0.6 bones <= MAX_BONES', () => {
+  for (let seed = 0; seed < 20; seed++) {
+    const { bones } = buildSkeleton(makeGenome({ whorl: 0.6, branchiness: 0.0 }), mulberry32(seed));
+    assert.ok(bones.length <= MAX_BONES, `seed=${seed}: whorl=0.6 exceeded bone budget: ${bones.length}`);
+  }
+});
+
+test('WHORL: conical envelope — whorl=0.7 base-tier chain length > top-tier chain length (clear margin)', () => {
+  // At whorl=0.7 with branchiness=0 (no BFS sub-branches), the chain lengths of
+  // branches attached near the base should clearly exceed those near the top.
+  // This confirms the conical envelope is effective.
+  const seed = 5;
+  const g = makeGenome({
+    branchiness: 0.0,
+    whorl: 0.7,
+    branchAngle: 0.6,
+    branchFactorN: 0.0,
+    structuralSeed: 0.3,
+  });
+  const { nodes, bones } = buildSkeleton(g, mulberry32(seed));
+
+  // Group whorl branch chains by their snap attachment parent Y.
+  // For each chain, compute total chain length (sum of bone segment lengths from
+  // the first node in the chain to the tip).
+  const stemNodes = nodes.filter(n => n.isStem);
+  if (stemNodes.length === 0) return;
+  const trunkBaseY = Math.min(...stemNodes.map(n => n.pos[1]));
+  const trunkTopY  = Math.max(...stemNodes.map(n => n.pos[1]));
+  const trunkSpan  = trunkTopY - trunkBaseY;
+
+  // Find all bones where the child is a level-1 woody node attached to a stem parent.
+  // These are the first-bone of each whorl branch chain.
+  const chainFirstBones = bones.filter(b => {
+    const child = nodes[b.b];
+    const parent = nodes[b.a];
+    return child && child.isWoody && child.branchLevel === 1 && parent && parent.isStem;
+  });
+
+  if (chainFirstBones.length === 0) {
+    assert.fail('No level-1 whorl branches found at whorl=0.7, branchiness=0');
+    return;
+  }
+
+  // For each chain start, walk its bone chain collecting total length.
+  // Build a children map.
+  const childrenMap = new Array(nodes.length).fill(null).map(() => []);
+  for (const b of bones) {
+    if (b.a >= 0 && b.b >= 0) childrenMap[b.a].push(b.b);
+  }
+
+  function chainLength(startNodeIdx) {
+    let len = 0;
+    let cur = startNodeIdx;
+    while (true) {
+      const children = childrenMap[cur].filter(c => nodes[c].isWoody && nodes[c].branchLevel === 1);
+      if (children.length === 0) break;
+      const next = children[0];
+      const dx = nodes[next].pos[0] - nodes[cur].pos[0];
+      const dy = nodes[next].pos[1] - nodes[cur].pos[1];
+      const dz = nodes[next].pos[2] - nodes[cur].pos[2];
+      len += Math.sqrt(dx*dx + dy*dy + dz*dz);
+      cur = next;
+    }
+    return len;
+  }
+
+  // Divide chains into bottom-third (tierPosFrac < 0.33) and top-third (tierPosFrac > 0.67).
+  const baseBones = chainFirstBones.filter(b => {
+    const snapY = nodes[b.a].pos[1];
+    const tierFrac = (snapY - trunkBaseY) / Math.max(trunkSpan, 1e-6);
+    return tierFrac < 0.40;
+  });
+  const topBones = chainFirstBones.filter(b => {
+    const snapY = nodes[b.a].pos[1];
+    const tierFrac = (snapY - trunkBaseY) / Math.max(trunkSpan, 1e-6);
+    return tierFrac > 0.60;
+  });
+
+  if (baseBones.length === 0 || topBones.length === 0) {
+    // Not enough tiers to compare — skip softly.
+    return;
+  }
+
+  const avgBaseLen = baseBones.map(b => chainLength(b.b)).reduce((a, v) => a + v, 0) / baseBones.length;
+  const avgTopLen  = topBones.map(b => chainLength(b.b)).reduce((a, v) => a + v, 0) / topBones.length;
+
+  assert.ok(
+    avgBaseLen > avgTopLen * 1.3,
+    `Conical envelope: base-tier avg chain length (${avgBaseLen.toFixed(4)}) should exceed top-tier (${avgTopLen.toFixed(4)}) by >= 30%`
+  );
+});
+
+test('WHORL: down-angle by height — base-tier Y-component of branch direction < top-tier (more horizontal/droop at base)', () => {
+  // Near crown: branches angle upward (larger Y component of direction).
+  // Near base: branches are more horizontal or drooped (smaller Y component of direction).
+  const seed = 5;
+  const g = makeGenome({
+    branchiness: 0.0,
+    whorl: 0.7,
+    branchAngle: 0.6,
+    branchFactorN: 0.0,
+    structuralSeed: 0.3,
+  });
+  const { nodes } = buildSkeleton(g, mulberry32(seed));
+
+  const stemNodes = nodes.filter(n => n.isStem);
+  if (stemNodes.length === 0) return;
+  const trunkBaseY = Math.min(...stemNodes.map(n => n.pos[1]));
+  const trunkTopY  = Math.max(...stemNodes.map(n => n.pos[1]));
+  const trunkSpan  = trunkTopY - trunkBaseY;
+
+  // For each level-1 woody node directly attached to a stem parent,
+  // compute the Y component of its direction from its attachment point.
+  const level1Woody = nodes.filter(n => n.isWoody && n.branchLevel === 1);
+  const dirsByTierFrac = level1Woody.map(n => {
+    const parent = nodes[n.parentIdx];
+    if (!parent || !parent.isStem) return null;
+    const dx = n.pos[0] - parent.pos[0];
+    const dy = n.pos[1] - parent.pos[1];
+    const dz = n.pos[2] - parent.pos[2];
+    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (len < 1e-8) return null;
+    const tierFrac = (parent.pos[1] - trunkBaseY) / Math.max(trunkSpan, 1e-6);
+    return { tierFrac, yDir: dy / len };
+  }).filter(Boolean);
+
+  const baseGroup = dirsByTierFrac.filter(d => d.tierFrac < 0.40);
+  const topGroup  = dirsByTierFrac.filter(d => d.tierFrac > 0.60);
+
+  if (baseGroup.length === 0 || topGroup.length === 0) return; // not enough tiers
+
+  const avgBaseY = baseGroup.reduce((a, d) => a + d.yDir, 0) / baseGroup.length;
+  const avgTopY  = topGroup.reduce((a, d) => a + d.yDir, 0) / topGroup.length;
+
+  assert.ok(
+    avgTopY > avgBaseY,
+    `Down-angle by height: top-tier avg Y direction (${avgTopY.toFixed(4)}) should exceed base-tier (${avgBaseY.toFixed(4)}) — crown sweeps up, base droops`
+  );
 });

@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSkeleton }    from '../src/skeleton.js';
 import { solveProportions } from '../src/proportions.js';
-import { buildBranchGeometry, MAX_WIND_BONES } from '../src/branchMesh.js';
+import { buildBranchGeometry, MAX_WIND_BONES, ringProfile } from '../src/branchMesh.js';
 import { resolve, randomGenome } from '../src/genome.js';
 import { createWindSolver } from '../src/windSolver.js';
 
@@ -1023,5 +1023,303 @@ test('resolved (rooted) graph: bone parent<child holds and createWindSolver does
       () => createWindSolver(bones_wind),
       `seed=${seed}: createWindSolver threw on a resolved (rooted) graph`
     );
+  }
+});
+
+// =============================================================================
+// RING PROFILE TESTS — ringProfile() unit tests and cross-section modulation
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// Hand-crafted minimal straight graph for profile geometry tests.
+// A 3-node straight trunk (all level 0), tip chain → 2 full rings + 1 apex.
+// We drive it with explicit opts.ribbing / opts.flatness.
+// ---------------------------------------------------------------------------
+function makeSimpleGraph() {
+  const nodes = [
+    { pos: [0, 0, 0],   radius: 0.10, branchLevel: 0, isRoot: false, isTerminal: false },
+    { pos: [0, 1, 0],   radius: 0.07, branchLevel: 0, isRoot: false, isTerminal: false },
+    { pos: [0, 2, 0],   radius: 0.01, branchLevel: 0, isRoot: false, isTerminal: true  },
+  ];
+  const bones = [{ a: 0, b: 1 }, { a: 1, b: 2 }];
+  return { nodes, bones };
+}
+
+test('ringProfile: identity at ribbing=0, flatness=0', () => {
+  // At ribbing=0 and flatness=0, for all theta:
+  //   rScale = 1, uScale = 1
+  //   nU = cos(theta), nV = sin(theta)
+  const steps = 64;
+  for (let i = 0; i < steps; i++) {
+    const theta = (i / steps) * 2 * Math.PI;
+    const ct = Math.cos(theta);
+    const st = Math.sin(theta);
+    const p = ringProfile(theta, { ribbing: 0, ribCount: 10, flatness: 0 });
+    assert.ok(Math.abs(p.rScale - 1.0) < 1e-10, `rScale should be 1 at theta=${theta}`);
+    assert.ok(Math.abs(p.uScale - 1.0) < 1e-10, `uScale should be 1 at theta=${theta}`);
+    assert.ok(Math.abs(p.nU - ct) < 1e-10, `nU should equal cos(theta) at theta=${theta}`);
+    assert.ok(Math.abs(p.nV - st) < 1e-10, `nV should equal sin(theta) at theta=${theta}`);
+  }
+});
+
+test('ringProfile: ribbing modulates rScale periodically', () => {
+  // With ribbing=1, rScale = 1 - RIB_DEPTH * 0.5 * (1 + cos(ribCount * theta))
+  // This varies from (1 - RIB_DEPTH) at cos=1 to 1 at cos=-1.
+  // Should observe min < max across samples.
+  const ribbing = 1.0;
+  const ribCount = 8;
+  const steps = 256;
+  let minScale = Infinity, maxScale = -Infinity;
+  for (let i = 0; i < steps; i++) {
+    const theta = (i / steps) * 2 * Math.PI;
+    const { rScale } = ringProfile(theta, { ribbing, ribCount, flatness: 0 });
+    if (rScale < minScale) minScale = rScale;
+    if (rScale > maxScale) maxScale = rScale;
+  }
+  assert.ok(minScale < maxScale, `ribbing should produce varying rScale: min=${minScale}, max=${maxScale}`);
+  // Should have approximately ribCount lobes: the range should be close to RIB_DEPTH.
+  const RIB_DEPTH = 0.35;
+  assert.ok(maxScale - minScale > RIB_DEPTH * 0.8,
+    `rScale range (${(maxScale - minScale).toFixed(4)}) should be close to RIB_DEPTH (${RIB_DEPTH})`);
+});
+
+test('ringProfile: flatness squashes uScale', () => {
+  const FLAT_MAX = 0.80;
+  const flatness = 0.8;
+  const { uScale } = ringProfile(0, { ribbing: 0, ribCount: 10, flatness });
+  const expected = 1 - flatness * FLAT_MAX;
+  assert.ok(Math.abs(uScale - expected) < 1e-10, `uScale should equal ${expected} at flatness=${flatness}`);
+
+  // At flatness=0: uScale = 1
+  const { uScale: uScale0 } = ringProfile(0, { ribbing: 0, ribCount: 10, flatness: 0 });
+  assert.ok(Math.abs(uScale0 - 1.0) < 1e-10, 'flatness=0 → uScale=1');
+});
+
+test('ringProfile: nU and nV give correct gradient direction at ribbing=0 (circle)', () => {
+  // At ribbing=0: nU=cos(theta), nV=sin(theta) — already verified in identity test.
+  // Additionally verify that nU^2 + nV^2 = 1 (the 3D normal will also be unit-length).
+  const steps = 64;
+  for (let i = 0; i < steps; i++) {
+    const theta = (i / steps) * 2 * Math.PI;
+    const { nU, nV } = ringProfile(theta, { ribbing: 0, ribCount: 10, flatness: 0 });
+    const len2 = nU * nU + nV * nV;
+    assert.ok(Math.abs(len2 - 1.0) < 1e-10, `nU^2+nV^2=${len2} should be 1 at theta=${theta}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Golden-pin test: at ribbing=0, flatness=0, output is byte-identical to default opts.
+// This is the regression guard for the no-op identity.
+// ---------------------------------------------------------------------------
+test('golden-pin: ribbing=0,flatness=0 output byte-identical to default opts', () => {
+  const graph = makeSimpleGraph();
+  const baseline = buildBranchGeometry(graph);
+  const explicit = buildBranchGeometry(graph, { ribbing: 0, flatness: 0, ribCount: 10 });
+
+  assert.strictEqual(baseline.vertexCount, explicit.vertexCount, 'vertexCount identical');
+  assert.strictEqual(baseline.triangleCount, explicit.triangleCount, 'triangleCount identical');
+
+  // Byte-identical positions and normals.
+  assert.ok(
+    baseline.positions.length === explicit.positions.length &&
+    baseline.positions.every((v, i) => v === explicit.positions[i]),
+    'positions byte-identical at ribbing=0,flatness=0'
+  );
+  assert.ok(
+    baseline.normals.length === explicit.normals.length &&
+    baseline.normals.every((v, i) => v === explicit.normals[i]),
+    'normals byte-identical at ribbing=0,flatness=0'
+  );
+  assert.ok(
+    baseline.indices.length === explicit.indices.length &&
+    baseline.indices.every((v, i) => v === explicit.indices[i]),
+    'indices byte-identical at ribbing=0,flatness=0'
+  );
+});
+
+// Also verify the golden-pin holds across a real generated graph (bushy, seed 0).
+test('golden-pin: real bushy graph — ribbing=0,flatness=0 byte-identical to default', () => {
+  const graph = buildGraph(bushyGenome, 0);
+  const baseline = buildBranchGeometry(graph);
+  const explicit = buildBranchGeometry(graph, { ribbing: 0, flatness: 0, ribCount: 10 });
+
+  assert.strictEqual(baseline.vertexCount, explicit.vertexCount, 'vertexCount identical');
+  assert.ok(
+    baseline.positions.every((v, i) => v === explicit.positions[i]),
+    'positions byte-identical (bushy seed=0)'
+  );
+  assert.ok(
+    baseline.normals.every((v, i) => v === explicit.normals[i]),
+    'normals byte-identical (bushy seed=0)'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ribbing=0.9: radial distance from axis varies periodically with ribCount lobes.
+// ---------------------------------------------------------------------------
+test('ribbing=0.9: ring radius oscillates with ribCount lobes', () => {
+  const graph = makeSimpleGraph();
+  const ribCount = 8;
+  const result = buildBranchGeometry(graph, { ribbing: 0.9, flatness: 0, ribCount });
+
+  assertWellFormed(result, 'ribbing=0.9');
+
+  // The graph is a straight trunk along Y. The first ring is at node 0 (pos=[0,0,0]).
+  // For the straight-trunk frame, u is perpendicular to Y (e.g. X), v = Z.
+  // Radial distance from the axis (Y axis) for the first ring vertices.
+  // segs = 16 for level 0.
+  const segs = 16;
+  const radii = [];
+  for (let j = 0; j < segs; j++) {
+    const vi = j; // first ring starts at vertex 0
+    const px = result.positions[vi * 3];
+    const py = result.positions[vi * 3 + 1];
+    const pz = result.positions[vi * 3 + 2];
+    // Node 0 is at [0,0,0]; radial distance from Y axis = sqrt(px^2 + pz^2).
+    radii.push(Math.sqrt(px * px + pz * pz));
+  }
+
+  const minR = Math.min(...radii);
+  const maxR = Math.max(...radii);
+  assert.ok(minR < maxR, `radii should vary: min=${minR.toFixed(5)}, max=${maxR.toFixed(5)}`);
+
+  // With ribCount=8 and segs=16, we have 2 samples per rib — should see clear modulation.
+  const variance = radii.reduce((s, r) => s + (r - (minR + maxR) / 2) ** 2, 0) / segs;
+  assert.ok(variance > 1e-6, `radii variance (${variance.toFixed(8)}) should be non-trivial`);
+});
+
+// ---------------------------------------------------------------------------
+// flatness=0.8: the ring bounding box is squashed along u (aspect ratio < 1).
+// ---------------------------------------------------------------------------
+test('flatness=0.8: ring bounding box is squashed along u-axis', () => {
+  const graph = makeSimpleGraph();
+  const result = buildBranchGeometry(graph, { ribbing: 0, flatness: 0.8, ribCount: 10 });
+
+  assertWellFormed(result, 'flatness=0.8');
+
+  // First ring at node 0 (pos=[0,0,0]), straight trunk along Y tangent.
+  // perpTo([0,1,0]) = normalize(cross([0,1,0],[1,0,0])) = normalize([0,0,-1]) = [0,0,-1]
+  // so frame: u = [0,0,-1], v = normalize([0,1,0] x [0,0,-1]) = [-1,0,0]
+  // Position = r * rScale * (cosθ * u * uScale + sinθ * v)
+  //          = r * rScale * (cosθ * [0,0,-1] * uScale + sinθ * [-1,0,0])
+  //          = r * rScale * (-sinθ, 0, -cosθ * uScale)
+  // So x-extent is driven by sinθ (full scale r), z-extent by cosθ * uScale (squashed).
+  // With flatness=0.8: z-extent < x-extent.
+  const segs = 16;
+  let xMin = Infinity, xMax = -Infinity;
+  let zMin = Infinity, zMax = -Infinity;
+  for (let j = 0; j < segs; j++) {
+    const vi = j;
+    const px = result.positions[vi * 3];
+    const pz = result.positions[vi * 3 + 2];
+    if (px < xMin) xMin = px; if (px > xMax) xMax = px;
+    if (pz < zMin) zMin = pz; if (pz > zMax) zMax = pz;
+  }
+  const xExtent = xMax - xMin; // v-axis (sinθ driven, full scale)
+  const zExtent = zMax - zMin; // u-axis (cosθ driven, squashed by uScale)
+  assert.ok(zExtent < xExtent,
+    `u-axis (z) extent (${zExtent.toFixed(5)}) should be less than v-axis (x) extent (${xExtent.toFixed(5)}) with flatness=0.8`);
+  // The aspect ratio should be close to (1 - 0.8*0.8) = 0.36 of the x-extent.
+  const FLAT_MAX = 0.80;
+  const expectedRatio = 1 - 0.8 * FLAT_MAX; // 0.36
+  const actualRatio = zExtent / xExtent;
+  assert.ok(Math.abs(actualRatio - expectedRatio) < 0.05,
+    `aspect ratio (${actualRatio.toFixed(4)}) should be close to ${expectedRatio.toFixed(4)}`);
+});
+
+// ---------------------------------------------------------------------------
+// Normals are unit-length and outward-facing for modulated cases.
+// ---------------------------------------------------------------------------
+test('normals are unit-length for ribbing=0.9 across genomes × seeds', () => {
+  for (let seed = 0; seed <= 10; seed++) {
+    for (const genome of [bushyGenome, sparseGenome, treeGenome]) {
+      const graph = buildGraph(genome, seed);
+      const { normals, vertexCount } = buildBranchGeometry(graph, { ribbing: 0.9, ribCount: 10 });
+      for (let i = 0; i < vertexCount; i++) {
+        const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        assert.ok(Math.abs(len - 1.0) < 1e-3,
+          `ribbing=0.9 seed=${seed} normal[${i}] length=${len.toFixed(6)} (expected ~1.0)`);
+      }
+    }
+  }
+});
+
+test('normals are unit-length for flatness=0.8 across genomes × seeds', () => {
+  for (let seed = 0; seed <= 10; seed++) {
+    for (const genome of [bushyGenome, sparseGenome, treeGenome]) {
+      const graph = buildGraph(genome, seed);
+      const { normals, vertexCount } = buildBranchGeometry(graph, { flatness: 0.8 });
+      for (let i = 0; i < vertexCount; i++) {
+        const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        assert.ok(Math.abs(len - 1.0) < 1e-3,
+          `flatness=0.8 seed=${seed} normal[${i}] length=${len.toFixed(6)} (expected ~1.0)`);
+      }
+    }
+  }
+});
+
+test('normals are outward-facing (dot with radial dir > 0) for ribbing and flatness', () => {
+  // For a straight trunk along Y: ring centers are at node.pos, ring frame has
+  // u=X, v=Z (perpTo gives this for Y-axis tangent). The radial direction from
+  // the node center to the vertex should have positive dot with the normal.
+  const graph = makeSimpleGraph();
+  for (const opts of [
+    { ribbing: 0.9, flatness: 0.0, ribCount: 8 },
+    { ribbing: 0.0, flatness: 0.8, ribCount: 10 },
+    { ribbing: 0.5, flatness: 0.5, ribCount: 6 },
+  ]) {
+    const result = buildBranchGeometry(graph, opts);
+    const segs = 16; // level 0 default
+    // Check first ring at node0 = [0,0,0].
+    for (let j = 0; j < segs; j++) {
+      const vi = j;
+      const px = result.positions[vi * 3];
+      const py = result.positions[vi * 3 + 1];
+      const pz = result.positions[vi * 3 + 2];
+      const nx = result.normals[vi * 3];
+      const ny = result.normals[vi * 3 + 1];
+      const nz = result.normals[vi * 3 + 2];
+      // Radial direction from node0=[0,0,0] to vertex (y component is near 0 since ring is flat).
+      const rx = px, rz = pz;
+      const rLen = Math.sqrt(rx * rx + rz * rz);
+      if (rLen < 1e-6) continue; // degenerate skip
+      const dot = (nx * rx + nz * rz) / rLen;
+      assert.ok(dot > 0,
+        `opts=${JSON.stringify(opts)} vertex ${j}: outward dot=${dot.toFixed(4)} should be > 0`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Determinism: two builds with same opts produce byte-identical output.
+// ---------------------------------------------------------------------------
+test('determinism: ribbing=0.7,flatness=0.5 two calls byte-identical', () => {
+  const genomes = [bushyGenome, sparseGenome, treeGenome];
+  for (let seed = 0; seed <= 5; seed++) {
+    for (const genome of genomes) {
+      const graph = buildGraph(genome, seed);
+      const opts = { ribbing: 0.7, flatness: 0.5, ribCount: 8 };
+      const r1 = buildBranchGeometry(graph, opts);
+      const r2 = buildBranchGeometry(graph, opts);
+      assert.ok(typedArraysEqual(r1.positions, r2.positions), `seed=${seed}: positions identical`);
+      assert.ok(typedArraysEqual(r1.normals, r2.normals), `seed=${seed}: normals identical`);
+      assert.ok(typedArraysEqual(r1.indices, r2.indices), `seed=${seed}: indices identical`);
+      assert.strictEqual(r1.vertexCount, r2.vertexCount, `seed=${seed}: vertexCount identical`);
+    }
+  }
+});
+
+// Well-formed geometry check for combined ribbing + flatness.
+test('combined ribbing=0.6,flatness=0.6 produces well-formed geometry across genomes', () => {
+  const genomes = [bushyGenome, sparseGenome, treeGenome];
+  const labels  = ['bushy', 'sparse', 'tree'];
+  for (let seed = 0; seed <= 10; seed++) {
+    for (let gi = 0; gi < genomes.length; gi++) {
+      const graph = buildGraph(genomes[gi], seed);
+      const result = buildBranchGeometry(graph, { ribbing: 0.6, flatness: 0.6, ribCount: 6 });
+      assertWellFormed(result, `${labels[gi]} seed=${seed} ribbing+flatness`);
+    }
   }
 });

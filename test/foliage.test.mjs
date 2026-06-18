@@ -15,6 +15,9 @@ import {
   OUTER_LEVEL_THRESHOLD,
   INNER_SEGMENT_PROB,
   MID_SEGMENT_PROB,
+  SPINE_BASE_SCALE,
+  SPINE_DENSITY,
+  SPINE_SALT,
 } from '../src/foliage.js';
 import { mulberry32 }         from '../src/rng.js';
 import { growRootSystem, ROOT_SALT } from '../src/roots.js';
@@ -266,12 +269,15 @@ test('lush genome yields >= 1500 clusters (full canopy with higher density)', ()
 // TEST: sparse genome yields < 50 clusters.
 // ---------------------------------------------------------------------------
 
-test('sparse genome yields < 50 clusters', () => {
-  const genome = makeSparseGenome();
+test('sparse genome yields < 50 leaf clusters (spininess=0 to isolate leaf pass)', () => {
+  // Set spininess=0 so the spine post-pass does not contribute to count.
+  // The assertion measures the leaf pass in isolation: a sparse genome should
+  // have very few leaf clusters (appendageDensity=0.10, leafDensity=0.60).
+  const genome = makeSparseGenome({ spininess: 0 });
   const result = generateFoliage(buildGraph(genome), genome);
   assert.ok(
     result.count < 50,
-    `Expected count < 50 for sparse genome, got ${result.count}`
+    `Expected count < 50 for sparse genome (leaf pass only), got ${result.count}`
   );
 });
 
@@ -394,14 +400,18 @@ test('no leaves are placed on root or branchLevel-0 trunk segments', () => {
     branchFactorN: 0.0,
     leafDensity:   1.5,
     appendageDensity: 1.0,
+    // spininess=0: spines (which now also target level-0 stem nodes) must be off
+    // so the count stays 0 and only the LEAF pass guard is tested here.
+    spininess: 0,
   };
   const minGraph = buildGraph(minimalGenome);
   const minResult = generateFoliage(minGraph, minimalGenome);
 
-  // With branchiness=0, all nodes are trunk (branchLevel=0) or root — no eligible segments.
+  // With branchiness=0 and spininess=0, all nodes are trunk (branchLevel=0) or root
+  // → leaf pass has no eligible segments → count === 0.
   assert.strictEqual(
     minResult.count, 0,
-    `Expected 0 leaves on unbranched plant, got ${minResult.count}`
+    `Expected 0 leaves on unbranched plant (spininess=0), got ${minResult.count}`
   );
 });
 
@@ -603,7 +613,9 @@ test('bare lower trunk: no clusters in proximal BARE_FRACTION of branchLevel-1 s
 
   // Try up to 30 seeds; with INNER_SEGMENT_PROB=0.15 we expect ~4-5 successes in 30.
   for (let seedIdx = 0; seedIdx < 30; seedIdx++) {
-    const genome = { ...baseGenome, structuralSeed: baseGenome.structuralSeed + seedIdx };
+    // spininess=0: spine pass emits no instances, so none appear in the bare zone
+    // (spines radiate from the stem surface without respecting the leaf bare zone).
+    const genome = { ...baseGenome, spininess: 0, structuralSeed: baseGenome.structuralSeed + seedIdx };
     const fakeGraph = {
       nodes: [
         {
@@ -1347,5 +1359,788 @@ test('LEAF-HANG: rng draw count is unchanged by weep (no extra draws at any weep
       r1.position[i],
       `position[${i}] differs between weep=0 and weep=1 — graph positions should be identical`
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: Step 0 — geometry confirmation.
+// With a willow-like weep≈0.55, tangent Y-components trend strongly negative.
+// This proves the GEOMETRY is already producing hanging cards — the lighting
+// fix (Parts A+B) is the right target, not the droop geometry.
+// ---------------------------------------------------------------------------
+
+test('STEP-0 geometry: willow genome (weep=0.55) tangent Y trends strongly negative', () => {
+  const willowGenome = makeBushyGenome({ weep: 0.55 });
+  const graph  = buildGraph(willowGenome);
+  const result = generateFoliage(graph, willowGenome);
+
+  assert.ok(result.count > 0, 'need at least one cluster');
+
+  // Compute mean tangent Y for the willow.
+  let sumY = 0;
+  for (let i = 0; i < result.count; i++) {
+    sumY += result.tangent[i * 3 + 1];
+  }
+  const meanY = sumY / result.count;
+
+  // hang = sqrt(0.55) ≈ 0.74, so most tangents should be strongly downward.
+  // A mean below -0.3 is a reasonable "strongly negative" threshold.
+  assert.ok(
+    meanY < -0.3,
+    `willow weep=0.55 mean tangent Y (${meanY.toFixed(4)}) should be < -0.3 (strongly hanging)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: Parts A+B — under weep>0, SoA normal Y-components trend non-negative
+// (sky-facing) so hanging leaves catch overhead light.
+// ---------------------------------------------------------------------------
+
+test('LEAF-HANG Parts A+B: weep>0 normals trend sky-facing (mean normal Y >= 0)', () => {
+  // At weep=0 (no-op), normals are computed as cross(tangent, radialDir) — pointing
+  // sideways (outward from the branch). Mean normal Y is near 0, slightly positive
+  // from phototropism. At weep=0.55, Parts A+B recompute the normal via rejection +
+  // sky tilt so mean normal Y must become distinctly positive.
+  const weep0Genome  = makeBushyGenome({ weep: 0   });
+  const weepHiGenome = makeBushyGenome({ weep: 0.55 });
+
+  // Use the same structural seed so graph topology is identical.
+  const graph0  = buildGraph(weep0Genome);
+  const graphHi = buildGraph(weepHiGenome);
+
+  const r0  = generateFoliage(graph0,  weep0Genome);
+  const rHi = generateFoliage(graphHi, weepHiGenome);
+
+  assert.ok(r0.count > 0 && rHi.count > 0, 'need clusters for comparison');
+
+  function meanNormalY(result) {
+    let sum = 0;
+    for (let i = 0; i < result.count; i++) {
+      sum += result.normal[i * 3 + 1];
+    }
+    return sum / result.count;
+  }
+
+  const meanNY0  = meanNormalY(r0);
+  const meanNYHi = meanNormalY(rHi);
+
+  // weep=0 normals are roughly sideways-outward (low Y), weep=0.55 should be sky-facing.
+  // The sky-tilt (Part B) with hang=sqrt(0.55)≈0.74 and k=0.65 gives skyBlend≈0.48,
+  // so most normals land between outward and up — mean Y should be clearly positive.
+  assert.ok(
+    meanNYHi > 0,
+    `weep=0.55 mean normal Y (${meanNYHi.toFixed(4)}) should be > 0 (sky-facing, Parts A+B)`
+  );
+
+  // weep normals should be more sky-facing than weep=0 normals.
+  assert.ok(
+    meanNYHi > meanNY0,
+    `weep=0.55 mean normal Y (${meanNYHi.toFixed(4)}) should exceed weep=0 (${meanNY0.toFixed(4)})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: weep=0 STRICT no-op — SoA normal is byte-identical to the pre-fix
+// baseline. Proves that the new code inside `if (weep > 0)` cannot affect the
+// weep=0 code path (normal is computed outside the block at weep=0).
+// ---------------------------------------------------------------------------
+
+test('LEAF-HANG Parts A+B no-op: weep=0 normal SoA byte-identical to weep-absent genome', () => {
+  // This test reuses the existing 'LEAF-HANG no-op' structure but explicitly
+  // checks the normal array (the field most affected by Parts A+B).
+  const genomeNoWeep = makeBushyGenome();             // no weep field
+  const genomeWeep0  = makeBushyGenome({ weep: 0 }); // explicit weep=0
+
+  const r1 = generateFoliage(buildGraph(genomeNoWeep), genomeNoWeep);
+  const r2 = generateFoliage(buildGraph(genomeWeep0),  genomeWeep0);
+
+  assert.strictEqual(r1.count, r2.count, 'weep=0 must not change count');
+
+  // Check every normal component (stride 3) for byte identity.
+  for (let i = 0; i < r1.count * 3; i++) {
+    assert.strictEqual(
+      r1.normal[i],
+      r2.normal[i],
+      `Parts A+B no-op: normal[${i}] differs at weep=0 vs no-weep`
+    );
+  }
+
+  // Also check tangent — Parts A does not change the tangent direction at weep=0
+  // (the weep block is not entered).
+  for (let i = 0; i < r1.count * 3; i++) {
+    assert.strictEqual(
+      r1.tangent[i],
+      r2.tangent[i],
+      `Parts A+B no-op: tangent[${i}] differs at weep=0 vs no-weep`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// SPINE POST-PASS TESTS
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// TEST: spininess=0 no-op — full SoA byte-identical to genome without spininess.
+//
+// Proves the guard fires before ANY rng draw in the spine block.
+// ---------------------------------------------------------------------------
+
+test('SPINE no-op: spininess=0 SoA is byte-identical to genome without spininess field', () => {
+  const genomeNoSpine = makeBushyGenome();              // no spininess field — defaults to 0
+  const genomeSpine0  = makeBushyGenome({ spininess: 0 }); // explicit 0
+
+  const graph1 = buildGraph(genomeNoSpine);
+  const graph2 = buildGraph(genomeSpine0);
+
+  const r1 = generateFoliage(graph1, genomeNoSpine);
+  const r2 = generateFoliage(graph2, genomeSpine0);
+
+  assert.strictEqual(r1.count, r2.count, 'count must be identical at spininess=0');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `spininess=0 no-op: ${key}[${i}] differs from no-spininess baseline`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: spininess>0 increases count above the spininess=0 baseline.
+//
+// Use a SPARSE leaf genome so leaf clusters don't saturate MAX_LEAVES,
+// leaving room for the spine post-pass to append instances.
+// ---------------------------------------------------------------------------
+
+test('SPINE: spininess>0 increases count vs spininess=0', () => {
+  // Low leaf density so leaves don't fill MAX_LEAVES, leaving room for spines.
+  const base = { appendageDensity: 0.10, leafDensity: 0.40, branchiness: 0.60 };
+  const genomeBase  = makeBushyGenome({ ...base, spininess: 0 });
+  const genomeSpiny = makeBushyGenome({ ...base, spininess: 0.8 });
+
+  // Use the same graph for a fair comparison.
+  const graph = buildGraph(genomeBase);
+
+  const rBase  = generateFoliage(graph, genomeBase);
+  const rSpiny = generateFoliage(graph, genomeSpiny);
+
+  assert.ok(
+    rSpiny.count > rBase.count,
+    `spininess=0.8 (${rSpiny.count}) should exceed spininess=0 (${rBase.count})`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: existing leaf instances [0..oldCount) are byte-identical when
+//       spininess>0 is added.  Proves the spine pass is append-only and
+//       the spine rng stream doesn't disturb the leaf stream.
+// ---------------------------------------------------------------------------
+
+test('SPINE: first oldCount instances byte-identical between spininess=0 and spininess>0', () => {
+  // Same structuralSeed → identical skeleton, identical foliage rng seed.
+  // Low leaf density to leave headroom for spine instances.
+  const base = { appendageDensity: 0.10, leafDensity: 0.40, branchiness: 0.60 };
+  const genomeBase  = makeBushyGenome({ ...base, spininess: 0 });
+  const genomeSpiny = makeBushyGenome({ ...base, spininess: 0.8 });
+
+  // Use the same graph for both to guarantee identical node positions.
+  const graph = buildGraph(genomeBase);
+
+  const rBase  = generateFoliage(graph, genomeBase);
+  const rSpiny = generateFoliage(graph, genomeSpiny);
+
+  const oldCount = rBase.count;
+  assert.ok(oldCount > 0, 'need leaf instances to compare');
+  assert.ok(rSpiny.count > oldCount, `spiny run (${rSpiny.count}) should have more total instances than base (${oldCount})`);
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < oldCount * stride; i++) {
+      assert.strictEqual(
+        rBase[key][i],
+        rSpiny[key][i],
+        `spine pass disturbed leaf ${key}[${i}]`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: appended spine instances have small scale (well below leaf scale).
+//
+// Use a SPARSE leaf genome so leaf clusters don't saturate MAX_LEAVES,
+// leaving room for the spine post-pass to append instances.
+// ---------------------------------------------------------------------------
+
+test('SPINE: appended instances have small scale (< LEAF_BASE / 2)', () => {
+  // Low leaf density so leaves don't fill MAX_LEAVES, leaving room for spines.
+  const base = { appendageDensity: 0.10, leafDensity: 0.40, branchiness: 0.60 };
+  const genomeBase  = makeBushyGenome({ ...base, spininess: 0 });
+  const genomeSpiny = makeBushyGenome({ ...base, spininess: 0.8 });
+
+  const graph = buildGraph(genomeBase);
+
+  const rBase  = generateFoliage(graph, genomeBase);
+  const rSpiny = generateFoliage(graph, genomeSpiny);
+
+  const oldCount   = rBase.count;
+  const spineStart = oldCount;
+
+  assert.ok(rSpiny.count > spineStart, `need spine instances to check (base count=${oldCount}, spiny count=${rSpiny.count})`);
+
+  const halfLeafBase = LEAF_BASE / 2; // 0.40
+
+  for (let i = spineStart; i < rSpiny.count; i++) {
+    assert.ok(
+      rSpiny.scale[i] < halfLeafBase,
+      `spine scale[${i}]=${rSpiny.scale[i].toFixed(4)} should be < ${halfLeafBase} (half of LEAF_BASE)`
+    );
+    assert.ok(
+      rSpiny.scale[i] > 0,
+      `spine scale[${i}] must be positive`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: spine tangents are roughly radial (perpendicular to branch axis).
+//
+// Each spine's tangent should be close to perpendicular to the branch segment
+// it was emitted from — i.e. |dot(spineTangent, branchAxis)| < 0.5 for most.
+//
+// Use a SPARSE leaf genome so leaves don't saturate MAX_LEAVES, leaving room
+// for spine instances to appear.
+// ---------------------------------------------------------------------------
+
+test('SPINE: appended tangents are roughly radial (not along-branch)', () => {
+  const base = { appendageDensity: 0.10, leafDensity: 0.40, branchiness: 0.60 };
+  const genomeBase  = makeBushyGenome({ ...base, spininess: 0 });
+  const genomeSpiny = makeBushyGenome({ ...base, spininess: 0.8 });
+
+  // Use the same graph object for both calls so spine positions anchor to the
+  // same nodes — this is the graph the spiny genome was actually solved with.
+  const graph = buildGraph(genomeBase);
+
+  const rBase  = generateFoliage(graph, genomeBase);
+  const rSpiny = generateFoliage(graph, genomeSpiny);
+
+  const oldCount  = rBase.count;
+  const { nodes } = graph;
+
+  // For each spine instance (index >= oldCount), find the nearest eligible
+  // woody segment (including level-0 stem nodes, which can now carry spines)
+  // and check |dot(spineTangent, branchAxis)| < 0.5.
+  let checked = 0;
+  let tooAligned = 0;
+
+  for (let i = oldCount; i < rSpiny.count; i++) {
+    const tx = rSpiny.tangent[i * 3];
+    const ty = rSpiny.tangent[i * 3 + 1];
+    const tz = rSpiny.tangent[i * 3 + 2];
+
+    // Find the nearest segment axis — now includes level-0 stem nodes since
+    // spines can attach there too.
+    const sx = rSpiny.position[i * 3];
+    const sy = rSpiny.position[i * 3 + 1];
+    const sz = rSpiny.position[i * 3 + 2];
+
+    let minDist = Infinity;
+    let nearestAxisDot = 0;
+
+    for (let ni = 0; ni < nodes.length; ni++) {
+      const n = nodes[ni];
+      if (n.isRoot) continue;
+      if (n.parentIdx === undefined || n.parentIdx < 0) continue;
+      if (!n.isWoody && !n.isTerminal) continue;
+      const p = nodes[n.parentIdx];
+      const d = pointToSegDist([sx, sy, sz], p.pos, n.pos);
+      if (d < minDist) {
+        minDist = d;
+        const ax = n.pos[0] - p.pos[0];
+        const ay = n.pos[1] - p.pos[1];
+        const az = n.pos[2] - p.pos[2];
+        const al = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (al > 1e-10) {
+          nearestAxisDot = Math.abs((tx * ax + ty * ay + tz * az) / al);
+        }
+      }
+    }
+
+    checked++;
+    if (nearestAxisDot > 0.5) tooAligned++;
+  }
+
+  assert.ok(checked > 0, 'need spine instances to check radial orientation');
+
+  // Allow at most 20% of spines to be mis-oriented (robustness margin for
+  // edge-case geometries where branch axis ≈ radial direction).
+  const misalignedFrac = tooAligned / checked;
+  assert.ok(
+    misalignedFrac <= 0.20,
+    `${tooAligned}/${checked} (${(misalignedFrac * 100).toFixed(1)}%) spine tangents are too aligned with the branch axis (expected <= 20%)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: spine determinism — same (genome, seed) twice → byte-identical SoA.
+// ---------------------------------------------------------------------------
+
+test('SPINE: generating the same (genome, seed) twice is byte-identical', () => {
+  const genome = makeBushyGenome({ spininess: 0.7, structuralSeed: 0xCAFEBABE });
+
+  const graph1 = buildGraph(genome);
+  const graph2 = buildGraph(genome);
+
+  const r1 = generateFoliage(graph1, genome);
+  const r2 = generateFoliage(graph2, genome);
+
+  assert.strictEqual(r1.count, r2.count, 'count must match');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `spine determinism: ${key}[${i}] differs on identical inputs`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: count stays <= MAX_LEAVES even with spininess=1.
+// ---------------------------------------------------------------------------
+
+test('SPINE: count stays <= MAX_LEAVES at spininess=1', () => {
+  const genome = makeBushyGenome({ spininess: 1.0, leafDensity: 1.5, appendageDensity: 1.0, branchiness: 1.0 });
+  const result = generateFoliage(buildGraph(genome), genome);
+  assert.ok(result.count <= MAX_LEAVES, `count ${result.count} exceeds MAX_LEAVES=${MAX_LEAVES} at spininess=1`);
+});
+
+// ---------------------------------------------------------------------------
+// TEST: BARREL CACTUS (unbranched) with spininess>0 produces spines on level-0 column.
+//
+// Regression guard for the bug where the spine pass iterated only over `segments`
+// (branchLevel >= 1), leaving unbranched plants (maxDepth=0, all nodes at
+// branchLevel=0) with zero spine instances despite spininess > 0.
+//
+// A real barrel cactus has low branchiness → maxDepth=0 → every node is a
+// level-0 trunk column. Spines should grow all along that column.
+// ---------------------------------------------------------------------------
+
+test('SPINE: unbranched (barrel cactus) genome with spininess>0 produces spine instances on level-0 column', () => {
+  // Low branchiness ensures the skeleton has no branches — all nodes are branchLevel=0.
+  // This matches the cactus-barrel preset (branchiness≈0.05).
+  const genome = makeBushyGenome({
+    branchiness:      0.05,
+    branchFactorN:    0.10,
+    tillering:        0.00,
+    spininess:        1.0,
+    appendageDensity: 0.10, // low leaf density → leaf pass produces 0 (BL>=1 guard)
+    leafDensity:      0.20,
+    structuralSeed:   0xBAADF00D,
+  });
+
+  const graph = buildGraph(genome);
+  const { nodes } = graph;
+
+  // Confirm all non-root nodes are at branchLevel=0 (truly unbranched).
+  const nonRootNodes = nodes.filter(n => !n.isRoot);
+  const hasBranchedNodes = nonRootNodes.some(n => n.branchLevel > 0);
+  assert.ok(!hasBranchedNodes, 'barrel cactus genome should have no branchLevel>0 nodes');
+
+  const result = generateFoliage(graph, genome);
+
+  // Leaf pass produces 0 (no BL>=1 segments), spine pass must produce > 0.
+  assert.ok(
+    result.count > 0,
+    `Expected spines on unbranched (barrel cactus) column, got count=${result.count}`
+  );
+
+  // All instances are spines (appended after leaf count=0), so all scales
+  // must be small (< LEAF_BASE / 2 = 0.40).
+  for (let i = 0; i < result.count; i++) {
+    assert.ok(
+      result.scale[i] < LEAF_BASE / 2,
+      `spine scale[${i}]=${result.scale[i].toFixed(4)} should be < ${LEAF_BASE / 2} (not a leaf)`
+    );
+    assert.ok(result.scale[i] > 0, `spine scale[${i}] must be positive`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TIP-TUFT GENE TESTS
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// TEST: tipTuft=0 no-op — full SoA byte-identical to genome without tipTuft field.
+//
+// Proves that at tipTuft=0, effectiveTipExp === TIP_EXPONENT and
+// effectiveSkip === baseSkip, so the output is byte-identical to the baseline.
+// ---------------------------------------------------------------------------
+
+test('TIP-TUFT no-op: tipTuft=0 SoA is byte-identical to genome without tipTuft field', () => {
+  const genomeNoTuft = makeBushyGenome();              // no tipTuft field — defaults to 0
+  const genomeTuft0  = makeBushyGenome({ tipTuft: 0 }); // explicit tipTuft=0
+
+  const graph1 = buildGraph(genomeNoTuft);
+  const graph2 = buildGraph(genomeTuft0);
+
+  const r1 = generateFoliage(graph1, genomeNoTuft);
+  const r2 = generateFoliage(graph2, genomeTuft0);
+
+  assert.strictEqual(r1.count, r2.count, 'tipTuft=0 must not change count');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `tipTuft=0 no-op: ${key}[${i}] differs from no-tipTuft baseline`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: tipTuft=0.8 concentrates clusters toward tips.
+//
+// The mean along-branch parametric position (t) of body clusters should shift
+// toward 1.0 (the tip) when tipTuft=0.8 vs tipTuft=0. We measure this by
+// projecting each cluster onto the nearest eligible branch segment axis and
+// computing the mean t across all projected clusters in [0, 1].
+// ---------------------------------------------------------------------------
+
+test('TIP-TUFT: tipTuft=0.8 shifts mean cluster t toward tip vs tipTuft=0', () => {
+  // Use a moderate bushy genome so we have enough segments and clusters to measure.
+  // Keep the same structuralSeed so the graph topology is identical.
+  const baseGenome = makeBushyGenome({ spininess: 0 }); // spininess=0 to isolate leaf pass
+  const genomeTuft0  = { ...baseGenome, tipTuft: 0   };
+  const genomeTuft08 = { ...baseGenome, tipTuft: 0.8 };
+
+  // Use the same graph for both — same node positions, identical rng draw count.
+  const graph = buildGraph(baseGenome);
+
+  const r0  = generateFoliage(graph, genomeTuft0);
+  const r08 = generateFoliage(graph, genomeTuft08);
+
+  assert.ok(r0.count > 0 && r08.count > 0, 'need clusters for comparison');
+
+  // Helper: project cluster positions onto their nearest eligible branch segment
+  // axis and collect the parametric t ∈ [0, 1] for clusters that land within [0, 1.2].
+  function collectProjectedT(result, nodes) {
+    const ts = [];
+    for (let ci = 0; ci < result.count; ci++) {
+      const px = result.position[ci * 3];
+      const py = result.position[ci * 3 + 1];
+      const pz = result.position[ci * 3 + 2];
+
+      // Find nearest eligible segment.
+      let bestT    = -1;
+      let bestDist = Infinity;
+
+      for (let ni = 0; ni < nodes.length; ni++) {
+        const n = nodes[ni];
+        if (n.isRoot || n.branchLevel === undefined || n.branchLevel < 1) continue;
+        if (n.parentIdx === undefined || n.parentIdx < 0) continue;
+        if (!n.isWoody && !n.isTerminal) continue;
+
+        const par = nodes[n.parentIdx];
+        const ax = n.pos[0] - par.pos[0];
+        const ay = n.pos[1] - par.pos[1];
+        const az = n.pos[2] - par.pos[2];
+        const lenSq = ax * ax + ay * ay + az * az;
+        if (lenSq < 1e-10) continue;
+
+        const dx = px - par.pos[0];
+        const dy = py - par.pos[1];
+        const dz = pz - par.pos[2];
+        const t  = (dx * ax + dy * ay + dz * az) / lenSq;
+
+        // Perpendicular distance to segment (clamped t for dist).
+        const tc = Math.max(0, Math.min(1, t));
+        const rx = dx - tc * ax;
+        const ry = dy - tc * ay;
+        const rz = dz - tc * az;
+        const dist = Math.sqrt(rx * rx + ry * ry + rz * rz);
+
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestT    = t;
+        }
+      }
+
+      // Only count clusters that project onto their segment (t ∈ [0, 1.2]).
+      if (bestT >= 0 && bestT <= 1.2) {
+        ts.push(bestT);
+      }
+    }
+    return ts;
+  }
+
+  const { nodes } = graph;
+  const ts0  = collectProjectedT(r0,  nodes);
+  const ts08 = collectProjectedT(r08, nodes);
+
+  assert.ok(ts0.length  > 0, 'need projected t values for tipTuft=0');
+  assert.ok(ts08.length > 0, 'need projected t values for tipTuft=0.8');
+
+  const mean0  = ts0.reduce( (s, t) => s + t, 0) / ts0.length;
+  const mean08 = ts08.reduce((s, t) => s + t, 0) / ts08.length;
+
+  assert.ok(
+    mean08 > mean0,
+    `tipTuft=0.8 mean t (${mean08.toFixed(4)}) should exceed tipTuft=0 mean t (${mean0.toFixed(4)}) — clusters should shift toward tip`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TEST: tipTuft rng draw count unchanged — positional shift uses no extra draws.
+//
+// Proof: run generateFoliage on the SAME graph with tipTuft=0 and tipTuft=0.8.
+// tipWeightedPositions() uses only the exponent + skip math (no rng calls).
+// The per-cluster rng draws (scale, jitter, azimuth, etc.) must be identical.
+// We verify via scale[] and rotation[] which bracket the per-cluster draw window.
+// ---------------------------------------------------------------------------
+
+test('TIP-TUFT: rng draw count is unchanged by tipTuft (no extra draws at any value)', () => {
+  const baseGenome = makeBushyGenome({ spininess: 0 });
+  const graph = buildGraph(baseGenome);
+
+  const r0  = generateFoliage(graph, { ...baseGenome, tipTuft: 0   });
+  const r08 = generateFoliage(graph, { ...baseGenome, tipTuft: 0.8 });
+
+  assert.strictEqual(r0.count, r08.count, 'count must be identical (same graph, same density)');
+
+  // scale[i] = 1st rng draw per cluster; rotation[i] = last rng draw per cluster.
+  // If tipTuft consumed extra draws, these would shift relative to each other.
+  for (let i = 0; i < r0.count; i++) {
+    assert.strictEqual(
+      r0.scale[i],
+      r08.scale[i],
+      `scale[${i}] differs between tipTuft=0 and tipTuft=0.8 — rng draw count changed`
+    );
+    assert.strictEqual(
+      r0.rotation[i],
+      r08.rotation[i],
+      `rotation[${i}] differs between tipTuft=0 and tipTuft=0.8 — rng draw count changed`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: tipTuft determinism — same (genome, seed) twice → byte-identical SoA.
+// ---------------------------------------------------------------------------
+
+test('TIP-TUFT: generating the same (genome, seed) twice is byte-identical', () => {
+  const genome = makeBushyGenome({ tipTuft: 0.8, spininess: 0, structuralSeed: 0xCAFE1234 });
+
+  const graph1 = buildGraph(genome);
+  const graph2 = buildGraph(genome);
+
+  const r1 = generateFoliage(graph1, genome);
+  const r2 = generateFoliage(graph2, genome);
+
+  assert.strictEqual(r1.count, r2.count, 'count must match');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `tipTuft determinism: ${key}[${i}] differs on identical inputs`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: BARREL CACTUS spininess=0 no-op remains byte-identical (level-0 extension
+// does not fire at spininess=0, so the existing no-op guarantee is unaffected).
+// ---------------------------------------------------------------------------
+
+test('SPINE: barrel cactus with spininess=0 is still byte-identical to no-spininess genome', () => {
+  // Use explicit full genomes rather than makeBushyGenome so that spininess can be
+  // absent or 0 without inheriting the makeBushyGenome default of 0.05.
+  const base = {
+    branchiness:      0.05,
+    branchFactorN:    0.10,
+    tillering:        0.00,
+    radialOrder:      0.50,
+    appendageBreadth: 0.70,
+    appendageDensity: 0.10,
+    segmentation:     0.50,
+    succulence:       0.20,
+    stemGirth:        0.50,
+    taper:            0.50,
+    rigidity:         0.60,
+    verticality:      0.50,
+    ribbing:          0.05,
+    branchAngle:      0.575,
+    lengthRatio:      0.70,
+    apicalBias:       0.50,
+    droopBias:        0.10,
+    pigment:          0.45,
+    leafSize:         1.40,
+    leafDensity:      0.20,
+    jitter:           0.80,
+    structuralSeed:   0xBAADF00D,
+  };
+  const genomeNoSpine = { ...base };              // no spininess field → defaults to 0
+  const genomeSpine0  = { ...base, spininess: 0 }; // explicit 0
+
+  const graph1 = buildGraph(genomeNoSpine);
+  const graph2 = buildGraph(genomeSpine0);
+
+  const r1 = generateFoliage(graph1, genomeNoSpine);
+  const r2 = generateFoliage(graph2, genomeSpine0);
+
+  assert.strictEqual(r1.count, r2.count, 'barrel cactus spininess=0 must not change count');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `barrel cactus spininess=0 no-op: ${key}[${i}] differs from no-spininess baseline`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// LEAF-SCALE GENE TESTS
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// TEST: leafScale=1.0 no-op — full SoA (all arrays + count) byte-identical to
+// genome without the leafScale field (via ?? 1.0 default).
+//
+// Regression guard: proves the identity default leaves the generation pipeline
+// byte-for-byte unchanged. Existing determinism tests stay green without edits.
+// ---------------------------------------------------------------------------
+
+test('LEAF-SCALE no-op: leafScale=1.0 SoA is byte-identical to genome without leafScale field', () => {
+  const genomeNoScale = makeBushyGenome();              // no leafScale field — defaults to 1.0
+  const genomeScale1  = makeBushyGenome({ leafScale: 1.0 }); // explicit 1.0
+
+  const graph1 = buildGraph(genomeNoScale);
+  const graph2 = buildGraph(genomeScale1);
+
+  const r1 = generateFoliage(graph1, genomeNoScale);
+  const r2 = generateFoliage(graph2, genomeScale1);
+
+  assert.strictEqual(r1.count, r2.count, 'leafScale=1.0 must not change count');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `leafScale=1.0 no-op: ${key}[${i}] differs from no-leafScale baseline`
+      );
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: leafScale=2.0 doubles mean leaf card size vs leafScale=1.0.
+//
+// count must be unchanged (density is unaffected).
+// rng draw count must be unchanged: scale[] and rotation[] at each slot must
+// be exactly 2× and 1× (respectively) of the leafScale=1.0 values, proving
+// that position/rng ordering is preserved and only the post-multiply changed.
+// ---------------------------------------------------------------------------
+
+test('LEAF-SCALE: leafScale=2.0 doubles mean scale vs leafScale=1.0, count unchanged', () => {
+  const genomeScale1 = makeBushyGenome({ leafScale: 1.0 });
+  const genomeScale2 = makeBushyGenome({ leafScale: 2.0 });
+
+  // Use the same graph so topology (and therefore count) is identical.
+  const graph = buildGraph(genomeScale1);
+
+  const r1 = generateFoliage(graph, genomeScale1);
+  const r2 = generateFoliage(graph, genomeScale2);
+
+  // count must be unchanged — leafScale only affects card size, not cluster count.
+  assert.strictEqual(r2.count, r1.count, 'leafScale=2.0 must not change cluster count');
+
+  // Mean scale at leafScale=2.0 must be ~2× the leafScale=1.0 mean.
+  let sum1 = 0;
+  let sum2 = 0;
+  for (let i = 0; i < r1.count; i++) {
+    sum1 += r1.scale[i];
+    sum2 += r2.scale[i];
+  }
+  const mean1 = sum1 / r1.count;
+  const mean2 = sum2 / r2.count;
+
+  // Allow ±1% tolerance for floating-point accumulation.
+  const ratio = mean2 / mean1;
+  assert.ok(
+    Math.abs(ratio - 2.0) < 0.01,
+    `leafScale=2.0 mean scale ratio should be ~2.0, got ${ratio.toFixed(4)}`
+  );
+
+  // Prove rng draw count is unchanged: rotation[] and ageColor[] must be byte-identical.
+  //
+  // rotation[i] is the LAST rng draw in writeCluster (clusterRoll = (rng()-0.5)*0.8).
+  // If leafScale changed the number of rng draws consumed before it, rotation would
+  // shift to a different rng output. It must be identical to prove the draw sequence
+  // is the same length.
+  //
+  // Note: position[] legitimately differs because clusterScale feeds into radialPush
+  // and volJit (both use clusterScale as a multiplier), so bigger cards sit radially
+  // further from the branch axis — that is intentional, not a draw-count disturbance.
+  //
+  // ageColor[] is deterministic from branchLevel (no rng draw), so it is always identical.
+  for (let i = 0; i < r1.count; i++) {
+    assert.strictEqual(
+      r1.rotation[i],
+      r2.rotation[i],
+      `rotation[${i}] differs between leafScale=1.0 and leafScale=2.0 — rng draw count changed`
+    );
+    assert.strictEqual(
+      r1.ageColor[i],
+      r2.ageColor[i],
+      `ageColor[${i}] differs between leafScale=1.0 and leafScale=2.0`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST: leafScale determinism — same (genome, seed) twice → byte-identical SoA.
+// ---------------------------------------------------------------------------
+
+test('LEAF-SCALE: determinism — same (genome, seed) twice is byte-identical', () => {
+  const genome = makeBushyGenome({ leafScale: 2.5, structuralSeed: 0xCAFE5CA1 });
+
+  const graph1 = buildGraph(genome);
+  const graph2 = buildGraph(genome);
+
+  const r1 = generateFoliage(graph1, genome);
+  const r2 = generateFoliage(graph2, genome);
+
+  assert.strictEqual(r1.count, r2.count, 'count must match');
+
+  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
+    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
+    for (let i = 0; i < r1.count * stride; i++) {
+      assert.strictEqual(
+        r1[key][i],
+        r2[key][i],
+        `leafScale determinism: ${key}[${i}] differs on identical inputs`
+      );
+    }
   }
 });

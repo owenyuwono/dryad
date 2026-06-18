@@ -56,6 +56,24 @@
 //     Draw 36: barkColor    (cosmetic — returned by resolve)
 //     Draw 37: barkPattern  (cosmetic — returned by resolve)
 //     Draw 38: weep         (proportions — NOT returned by resolve; consumed in proportions.js)
+//   Structural stature gene (appended AFTER draw 38):
+//     Draw 39: trunkHeight  (structural — skeleton scale, 0.5=identity)
+//   New inert genes (appended AFTER draw 39 — no consumers wired yet):
+//     Draw 40: flatness     (proportions — tube cross-section squash; 0=no-op)
+//     Draw 41: stemSpread   (structural — tillering base spread; 0=no-op)
+//     Draw 42: rosette      (structural — apical whorl; 0=no-op)
+//   New inert genes (appended AFTER draw 42 — no consumers wired yet):
+//     Draw 43: woodiness    (proportions — lignification degree; 1.0=fully woody identity)
+//     Draw 44: whorl        (structural — whorled branching pattern; 0=no-op)
+//     Draw 45: tipTuft      (proportions — apical leaf concentration; 0=no-op)
+//   New inert genes (appended AFTER draw 45 — no consumers wired yet):
+//     Draw 46: needleLeaf   (cosmetic — needle-leaf morphology; 0=no-op)
+//     Draw 47: leafScale    (cosmetic — leaf cluster scale multiplier; 1.0=identity)
+//     Draw 48: frondLeaf    (cosmetic — palm-frond leaf sprite; 0=no-op broadleaf)
+//   Phototropism gene (appended AFTER draw 48 — proportions, consumed by proportions.js):
+//     Draw 49: phototropism (proportions — sun-lean scale; 1.0=identity full lean, 0=no lean)
+//   trunkTaper gene (appended AFTER draw 49 — proportions, consumed by proportions.js):
+//     Draw 50: trunkTaper (proportions — trunk cylinder blend; 0=identity no-op)
 //
 // NEUTRAL DEFAULTS (geneNeutral) — the sensible middling plant:
 //   branchiness:      0.50   (moderate branching)
@@ -75,7 +93,7 @@
 //   branchAngle:      0.575  (mid of [0.35,0.80] ≈ 33°)
 //   lengthRatio:      0.70   (mid of [0.55,0.85])
 //   apicalBias:       0.50   (balanced leader/lateral)
-//   droopBias:        0.10   (mild droop, mid of [-0.2,0.4])
+//   droopBias:        0.00   (no droop — identity-0 wiring no-op; was the draw center, now centered at 0)
 //   pigment:          0.45   (on the full-hue wheel this is ~162° = blue-green; TREE_DEFAULT uses 0.33 for green)
 //   leafSize:         1.10   (mid of [0.6,1.6])
 //   leafDensity:      1.00   (mid of [0.5,1.5])
@@ -173,7 +191,7 @@ const NEUTRAL = Object.freeze({
   branchAngle:      0.575,
   lengthRatio:      0.70,
   apicalBias:       0.50,
-  droopBias:        0.10,
+  droopBias:        0.00,   // 0 = no droop — droopBias is wired with identity 0, so the draw centers at no-droop
   // Cosmetic (pigment handled separately via seed draw)
   pigment:          0.45,
   leafSize:         1.10,
@@ -193,6 +211,24 @@ const NEUTRAL = Object.freeze({
   weep:             0.00,
   // trunkHeight (draw 39) — 0.5 = identity (1.0× scale factor, byte-identical to pre-gene)
   trunkHeight:      0.50,
+  // New inert genes (draws 40–42) — 0 = strict no-op at neutral
+  flatness:         0.00,
+  stemSpread:       0.00,
+  rosette:          0.00,
+  // New inert genes (draws 43–45) — identity defaults, no consumer wired yet
+  woodiness:        1.00,  // 1.0 = fully woody (today's default — no-op)
+  whorl:            0.00,  // 0 = no whorled branching — no-op
+  tipTuft:          0.00,  // 0 = no tip tuft — no-op
+  // New inert genes (draws 46–48) — identity defaults, no consumer wired yet
+  needleLeaf:       0.00,  // 0 = broad leaf (no-op)
+  leafScale:        1.00,  // 1.0 = no scaling (identity, range min)
+  frondLeaf:        0.00,  // 0 = broadleaf sprite (no-op)
+  // phototropism (draw 49) — 1.0 = full sun-lean (identity, proportions.js unchanged)
+  phototropism:     1.00,
+  // trunkTaper (draw 50) — 0 = identity (trunk taper unchanged, byte-identical output)
+  trunkTaper:       0.00,
+  // trunkRings (draw 51) — 0 = identity (no ring banding — bark byte-identical)
+  trunkRings:       0.00,
   // Root system (draws 24–30)
   rootCount:        0.45,
   rootDepth:        0.45,
@@ -274,6 +310,24 @@ function computeEnvOffset(env) {
     weep:             medium === 'water' ? 0.05 : 0,
     // trunkHeight offset (0 at all envs — stature is seed-driven, not env-driven)
     trunkHeight:      0,
+    // New inert genes (draws 40–42) — 0 offset at all envs this phase
+    flatness:         0,
+    stemSpread:       0,
+    rosette:          0,
+    // New inert genes (draws 43–45) — 0 offset at all envs this phase
+    woodiness:        0,
+    whorl:            0,
+    tipTuft:          0,
+    // New inert genes (draws 46–48) — 0 offset at all envs this phase
+    needleLeaf:       0,
+    leafScale:        0,
+    frondLeaf:        0,
+    // phototropism (draw 49) — 0 offset at all envs (stature is seed-driven, not env-driven)
+    phototropism:     0,
+    // trunkTaper offset (0 at all envs — trunk cylinder is seed-driven, not env-driven)
+    trunkTaper:       0,
+    // trunkRings offset (0 at all envs — ring banding is seed-driven, not env-driven)
+    trunkRings:       0,
   };
 
   // --- aridity + temperature → dry/hot = cactus region ---
@@ -438,6 +492,44 @@ export function randomGenome(env, seed) {
   // At neutral (0.5) the skeleton scale factor is exactly 1.0 → byte-identical output.
   const trunkHeight = gene('trunkHeight', STD);           // draw 39
 
+  // --- New inert genes (draws 40–42) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 39 (trunkHeight). Draws 01–39 are untouched.
+  // All default to 0 (strict no-op); no consumer is wired this phase.
+  const flatness   = gene('flatness',   STD);             // draw 40
+  const stemSpread = gene('stemSpread', STD);             // draw 41
+  const rosette    = gene('rosette',    STD);             // draw 42
+
+  // --- New inert genes (draws 43–45) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 42 (rosette). Draws 01–42 are untouched.
+  // woodiness: 1.0 = fully woody (today's identity). whorl/tipTuft: 0 = no-op.
+  // No consumer is wired this phase.
+  const woodiness  = gene('woodiness',  STD);             // draw 43
+  const whorl      = gene('whorl',      STD);             // draw 44
+  const tipTuft    = gene('tipTuft',    STD);             // draw 45
+
+  // --- New inert genes (draws 46–48) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 45 (tipTuft). Draws 01–45 are untouched.
+  // needleLeaf: 0 = broad leaf (no-op). leafScale: 1.0 = identity (range minimum, no scaling).
+  // No consumer is wired this phase.
+  const needleLeaf = gene('needleLeaf', STD);             // draw 46
+  const leafScale  = gene('leafScale',  STD);             // draw 47
+  const frondLeaf  = gene('frondLeaf',  STD);             // draw 48
+
+  // --- phototropism gene (draw 49) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 48 (frondLeaf). Draws 01–48 are untouched.
+  // 1.0 = full sun-lean (identity — proportions.js behaviour unchanged). 0.0 = no sun-lean.
+  const phototropism = gene('phototropism', STD);         // draw 49
+
+  // --- trunkTaper gene (draw 50) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 49 (phototropism). Draws 01–49 are untouched.
+  // 0 = identity (trunk taper unchanged). 1 = fully cylindrical trunk.
+  const trunkTaper = gene('trunkTaper', STD);            // draw 50
+
+  // --- trunkRings gene (draw 51) ---
+  // DETERMINISM-CRITICAL: appended AFTER draw 50 (trunkTaper). Draws 01–50 are untouched.
+  // 0 = identity (no ring banding — bark byte-identical). Cosmetic only — barkMaterial consumer.
+  const trunkRings = gene('trunkRings', STD);            // draw 51
+
   return {
     // Structural
     branchiness,
@@ -473,6 +565,18 @@ export function randomGenome(env, seed) {
     barkPattern,
     weep,
     trunkHeight,
+    flatness,
+    stemSpread,
+    rosette,
+    woodiness,
+    whorl,
+    tipTuft,
+    needleLeaf,
+    leafScale,
+    frondLeaf,
+    phototropism,
+    trunkTaper,
+    trunkRings,
     structuralSeed,
     // Root system
     rootCount,
@@ -551,9 +655,19 @@ export function resolve(genome, env) {
     leafLobing:    genome.leafLobing,
     barkColor:     genome.barkColor,
     barkPattern:   genome.barkPattern,
+    trunkRings:    genome.trunkRings  ?? 0,
+    needleLeaf:    genome.needleLeaf  ?? 0,
+    frondLeaf:     genome.frondLeaf   ?? 0,
+    leafScale:     genome.leafScale   ?? 1.0,
+    // Mesh cross-section params — passed through to buildBranchGeometry opts.
+    // ribbing and flatness pass through directly (0 = perfect circle, no-op).
+    // ribCount is derived from segmentation: 8 + round(segmentation * 8) → [8, 16].
+    ribbing:       genome.ribbing   ?? 0,
+    flatness:      genome.flatness  ?? 0,
+    ribCount:      Math.max(8, Math.min(16, 8 + Math.round((genome.segmentation ?? 0) * 8))),
     lightFlux:   env.light,
     foliage,
-    woodiness:   Math.max(0, Math.min(1, 1 - genome.succulence)),
+    woodiness:   genome.woodiness ?? 1.0,
   };
 }
 

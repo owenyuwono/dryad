@@ -36,6 +36,13 @@ import { mulberry32 } from './rng.js';
 // Public constants — exposed for tuning and tests.
 // ---------------------------------------------------------------------------
 
+/**
+ * Salt XOR'd with structuralSeed to produce the isolated spine RNG stream.
+ * Must differ from 0x1EAF1EAF (the foliage stream salt) so the two streams
+ * are independent even when spininess > 0.
+ */
+export const SPINE_SALT = 0x5B1E5B1E;
+
 /** Maximum cluster instances allocated (hard budget). */
 export const MAX_LEAVES = 6000;
 
@@ -131,6 +138,22 @@ export const INNER_SEGMENT_PROB = 0.15;
 export const MID_SEGMENT_PROB = 0.55;
 
 // ---------------------------------------------------------------------------
+// Spine constants — used by the gated spine post-pass.
+// ---------------------------------------------------------------------------
+
+/**
+ * Base scale of a spine card in world units, before genome.spininess scaling.
+ * Spines are short needles — deliberately much smaller than LEAF_BASE (0.80).
+ */
+export const SPINE_BASE_SCALE = 0.12;
+
+/**
+ * Number of spines emitted per eligible node, at spininess=1.
+ * Density scales linearly with spininess so low values give a subtle bristle.
+ */
+export const SPINE_DENSITY = 6;
+
+// ---------------------------------------------------------------------------
 // Internal math helpers (no allocations beyond small arrays).
 // ---------------------------------------------------------------------------
 
@@ -193,7 +216,7 @@ function bareSkip(branchLevel) {
 }
 
 /**
- * Sample tip-weighted positions on [skip, 1] using t^TIP_EXPONENT density.
+ * Sample tip-weighted positions on [skip, 1] using t^tipExp density.
  * Returns `n` values in (skip, 1].
  *
  * Strategy: generate evenly-spaced samples in [0,1] then map through the
@@ -201,11 +224,17 @@ function bareSkip(branchLevel) {
  * the skip zone.
  *
  * After skip the active range is [skip, 1] of length L = 1 - skip.
- * We remap: s = skip + ((k+0.5)/n)^(1/(TIP_EXPONENT+1)) * L
+ * We remap: s = skip + ((k+0.5)/n)^(1/(tipExp+1)) * L
+ *
+ * @param {number} n       — number of samples to generate
+ * @param {number} skip    — proximal bare fraction to skip (0 = full coverage)
+ * @param {number} [tipExp=TIP_EXPONENT] — exponent controlling tip-weighting strength;
+ *   higher values push more clusters toward the distal tip. Defaults to TIP_EXPONENT
+ *   so existing call sites are unchanged.
  */
-function tipWeightedPositions(n, skip) {
+function tipWeightedPositions(n, skip, tipExp = TIP_EXPONENT) {
   const L = 1.0 - skip;
-  const exp = 1.0 / (TIP_EXPONENT + 1.0);
+  const exp = 1.0 / (tipExp + 1.0);
   const result = new Array(n);
   for (let k = 0; k < n; k++) {
     const normalized = Math.pow((k + 0.5) / n, exp);
@@ -265,9 +294,21 @@ export function generateFoliage(graph, genome, opts) {
   const appendageBreadth = genome.appendageBreadth !== undefined ? genome.appendageBreadth : 0.45;
   const radialOrder      = genome.radialOrder      !== undefined ? genome.radialOrder      : 0.25;
 
+  // leafScale ∈ [1.0, 3.0], identity 1.0: multiplies per-cluster card size.
+  // At leafScale=1.0 this is a strict no-op (×1.0) so the SoA is byte-identical
+  // to the pre-leafScale baseline. No rng draws are consumed by this read.
+  const leafScale = genome.leafScale ?? 1.0;
+
   // weep ∈ [0,1]: 0 = no-op (normal orientation), 1 = leaves hang straight down.
   // Strict no-op at weep=0 — the blend block below is skipped entirely via guard.
-  const weep = genome.weep !== undefined ? (genome.weep ?? 0) : 0;
+  const weep = genome.weep ?? 0;
+
+  // tipTuft ∈ [0,1]: 0 = no-op (existing tip-weighting), 1 = strongly concentrated
+  // near branch tips (pine/conifer tufted look). Strict no-op at tipTuft=0 — when
+  // tipTuft=0, effectiveTipExp === TIP_EXPONENT and effectiveSkip === bareSkip(level),
+  // so the SoA output is byte-identical to the pre-tipTuft baseline.
+  // NOTE: Only WHERE clusters sit changes — not how many rng() draws happen.
+  const tipTuft = genome.tipTuft ?? 0;
 
   // -------------------------------------------------------------------------
   // Separate deterministic RNG stream — NEVER touches the skeleton stream.
@@ -359,7 +400,9 @@ export function generateFoliage(graph, genome, opts) {
     // Leaf size is a uniform species size (genome.leafSize) — NOT scaled by branch
     // thickness. Real leaves are the same size on a fine twig as on a thick branch,
     // and they live mostly on the fine twigs, so scaling them down there was backwards.
-    const clusterScale = LEAF_BASE * leafSize * (0.6 + 0.4 * appendageBreadth) * sizeJitter * nodeWeight;
+    // leafScale multiplies the final card size (palm/tropical big-frond multiplier).
+    // At leafScale=1.0 this is a strict no-op (×1.0) — SoA byte-identical to baseline.
+    const clusterScale = LEAF_BASE * leafSize * (0.6 + 0.4 * appendageBreadth) * sizeJitter * nodeWeight * leafScale;
 
     // CANOPY ENVELOPE JITTER
     const jitter = (rng() - 0.5) * 2.0 * JITTER_FRAC * segLen;
@@ -408,16 +451,66 @@ export function generateFoliage(graph, genome, opts) {
     // LEAF-HANG: blend tangent toward gravity (downward) proportional to weep.
     // At weep=0 this block is unreachable (outer guard `weep > 0` is never true),
     // so the SoA output is byte-identical to the pre-weep baseline. No rng draws.
+    //
+    // Concave curve: hang = sqrt(weep) so a moderate weep (e.g. 0.55) gives a
+    // strong downward leaf hang (~0.74 effective blend) while branch droop in
+    // proportions.js remains moderate. Decouples "leaves fall" from "branches droop."
+    // weep=0 → hang=0 → block never entered → strict no-op (identity).
+    //
+    // PART A — recompute clusterNormal inside the weep block (only) so that when
+    // clusterTangent ≈ [0,-1,0] the face normal is NOT sideways (which the old
+    // cross(tangent, radialDir) formula produces for a downward tangent).
+    // Instead use the Gram-Schmidt rejection of radialDir from clusterTangent:
+    //   n = normalize(radialDir - clusterTangent * dot(radialDir, clusterTangent))
+    // This gives a normal that is perpendicular to the hanging tangent and points
+    // outward (in the radialDir hemisphere). Safe fallback to cross-product when
+    // the rejection is degenerate (radialDir nearly parallel to clusterTangent).
+    //
+    // PART B — tilt that outward normal toward sky [0,1,0] by hang*k so hanging
+    // cards catch overhead light. k=0.65 keeps the normal strongly sky-facing at
+    // moderate weep (willow preset ≈ 0.55) while not over-correcting to pure up.
+    // weep=0 → block never entered → clusterNormal computed outside as before.
+    let weepNormal = null;
     if (weep > 0) {
+      const hang = Math.sqrt(weep);
       const DOWN = [0, -1, 0];
       clusterTangent = norm3([
-        clusterTangent[0] * (1 - weep) + DOWN[0] * weep,
-        clusterTangent[1] * (1 - weep) + DOWN[1] * weep,
-        clusterTangent[2] * (1 - weep) + DOWN[2] * weep,
+        clusterTangent[0] * (1 - hang) + DOWN[0] * hang,
+        clusterTangent[1] * (1 - hang) + DOWN[1] * hang,
+        clusterTangent[2] * (1 - hang) + DOWN[2] * hang,
+      ]);
+
+      // PART A: outward-facing normal perpendicular to the hanging tangent.
+      const dRad = dot3(radialDir, clusterTangent);
+      const rejX = radialDir[0] - clusterTangent[0] * dRad;
+      const rejY = radialDir[1] - clusterTangent[1] * dRad;
+      const rejZ = radialDir[2] - clusterTangent[2] * dRad;
+      const rejLen = Math.sqrt(rejX * rejX + rejY * rejY + rejZ * rejZ);
+      let outwardNormal;
+      if (rejLen > 1e-6) {
+        outwardNormal = [rejX / rejLen, rejY / rejLen, rejZ / rejLen];
+      } else {
+        // Degenerate: radialDir nearly parallel to tangent — fall back to cross-product.
+        outwardNormal = norm3(cross3(clusterTangent, radialDir));
+      }
+
+      // PART B: tilt outward normal toward sky so hanging leaves catch overhead light.
+      // k=0.65 gives enough sky-facing bias at willow preset (weep≈0.55, hang≈0.74)
+      // without making all normals point straight up.
+      const k = 0.65;
+      const skyBlend = hang * k;
+      weepNormal = norm3([
+        outwardNormal[0] * (1 - skyBlend) + 0 * skyBlend,
+        outwardNormal[1] * (1 - skyBlend) + 1 * skyBlend,
+        outwardNormal[2] * (1 - skyBlend) + 0 * skyBlend,
       ]);
     }
 
-    const clusterNormal = norm3(cross3(clusterTangent, radialDir));
+    // clusterNormal: use weep-specific sky-facing normal when weep>0,
+    // otherwise use the original formula (weep=0 path is byte-identical to before).
+    const clusterNormal = weepNormal !== null
+      ? weepNormal
+      : norm3(cross3(clusterTangent, radialDir));
     const clusterRoll   = (rng() - 0.5) * 0.8;
 
     // EXPOSURE: 0=deep/inner/shaded, 1=outer/top/sunlit
@@ -517,9 +610,20 @@ export function generateFoliage(graph, genome, opts) {
     // BARE ZONE RULE (deeper for inner branches):
     // Terminal twigs: skip=0 (tip-to-base full coverage).
     // Non-terminal: bareSkip() per branchLevel.
+    //
+    // tipTuft modulates both the exponent and the skip:
+    //   effectiveTipExp = TIP_EXPONENT + tipTuft * 4.0
+    //     → at tipTuft=1 the exponent is 5.5, strongly concentrating clusters at the tip.
+    //   effectiveSkip = baseSkip + (1 - baseSkip) * tipTuft * 0.6
+    //     → as tipTuft rises, the bare zone expands toward the tip, pushing the
+    //       active range further distal.
+    // At tipTuft=0: effectiveTipExp === TIP_EXPONENT and effectiveSkip === baseSkip
+    //   → byte-identical output to the pre-tipTuft baseline (strict no-op).
     // -----------------------------------------------------------------------
-    const effectiveSkip = node.isTerminal ? 0 : bareSkip(node.branchLevel);
-    const tValues = tipWeightedPositions(bodyToPlace, effectiveSkip);
+    const baseSkip = node.isTerminal ? 0 : bareSkip(node.branchLevel);
+    const effectiveTipExp = TIP_EXPONENT + tipTuft * 4.0;
+    const effectiveSkip   = baseSkip + (1 - baseSkip) * tipTuft * 0.6;
+    const tValues = tipWeightedPositions(bodyToPlace, effectiveSkip, effectiveTipExp);
 
     for (let k = 0; k < bodyToPlace; k++) {
       writeCluster(pPos, rawAxis, axis, segLen, midRadius, node, tValues[k], azBase, k, leafAge, crownMinY, crownYRange, nodeIdx);
@@ -562,6 +666,137 @@ export function generateFoliage(graph, genome, opts) {
       // geometry without floating clusters into empty space above the branch end.
       const t = apicalToPlace === 1 ? 1.02 : 1.0 + (idx / (apicalToPlace - 1)) * 0.03;
       writeCluster(pPos, rawAxis, axis, segLen, midRadius, node, t, azBase, idx, leafAge, crownMinY, crownYRange, nodeIdx);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // SPINE POST-PASS — gated on spininess > 0.
+  //
+  // Emits short, radially-oriented needle cards on woody nodes.  Uses a
+  // completely separate RNG stream (SPINE_SALT) so the existing leaf draw
+  // stream [0 .. oldCount) is NEVER disturbed.
+  //
+  // DETERMINISM INVARIANT:
+  //   spininess === 0  →  this entire block is SKIPPED (zero rng draws,
+  //   zero appended instances).  The SoA is byte-identical to the pre-pass
+  //   baseline.  The guard must appear BEFORE any rng() call in this block.
+  //
+  // When spininess > 0:
+  //   All existing leaf instances [0 .. oldCount) are untouched because:
+  //     1. The spine rng stream is a fresh mulberry32 seeded independently.
+  //     2. Spines only append (count grows from oldCount upward).
+  //     3. writeCluster() uses the LEAF rng; spines use their own spineRng.
+  //
+  // Placement: one pass over `segments` (already collected, same list as
+  // body pass).  Each woody node emits spineCount spine cards.  A spine card
+  // has a small fixed scale (SPINE_BASE_SCALE * spininess), a tangent
+  // pointing radially outward from the branch axis, and a normal that is
+  // perpendicular to both the branch axis and the radial tangent — giving
+  // the card a "standing-upright" needle orientation.
+  // -------------------------------------------------------------------------
+  const spininess = genome.spininess !== undefined ? genome.spininess : 0;
+
+  if (spininess > 0) {
+    // Fresh, isolated stream — NEVER touches the leaf rng above.
+    const spineRng = mulberry32((genome.structuralSeed ^ SPINE_SALT) >>> 0);
+
+    const spineCount = Math.max(1, Math.round(SPINE_DENSITY * spininess));
+    const spineScale = SPINE_BASE_SCALE * (0.5 + 0.5 * spininess);
+
+    // Build an extended segment list for spines: includes ALL non-root skeleton
+    // nodes (branchLevel 0 stem columns and branchLevel >= 1 branch arms alike).
+    // This lets barrel cactus (unbranched, all nodes at branchLevel=0) grow spines
+    // all along its main column, and saguaro gets spines on both trunk and arms.
+    // Root nodes are always excluded.
+    // This list is built ONLY inside the spininess > 0 guard, so it incurs zero
+    // cost and zero rng draws when spininess === 0.
+    const spineSegments = [];
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.isRoot) continue;
+      const pIdx = node.parentIdx;
+      if (pIdx === undefined || pIdx < 0) continue;
+      spineSegments.push({ parentIdx: pIdx, nodeIdx: i, node });
+    }
+
+    for (const { parentIdx, nodeIdx, node } of spineSegments) {
+      if (count >= MAX_LEAVES) break;
+
+      const parent  = nodes[parentIdx];
+      const pPos    = parent.pos;
+      const nPos    = node.pos;
+      const rawAxis = [nPos[0] - pPos[0], nPos[1] - pPos[1], nPos[2] - pPos[2]];
+      const segLen  = len3(rawAxis);
+      if (segLen < 1e-10) {
+        // Consume azimuth draw for this segment's spines for determinism.
+        spineRng();
+        continue;
+      }
+      const axis = norm3(rawAxis);
+
+      // One azimuth base draw per segment (matches the body-pass pattern).
+      const azBase = spineRng() * Math.PI * 2;
+
+      const toPlace = Math.min(spineCount, MAX_LEAVES - count);
+
+      for (let k = 0; k < toPlace; k++) {
+        if (count >= MAX_LEAVES) break;
+
+        // Position: evenly spaced along segment [0.05, 0.95] — avoid extremes.
+        const t = 0.05 + (k / Math.max(toPlace - 1, 1)) * 0.90;
+
+        const spinePos = [
+          pPos[0] + rawAxis[0] * t,
+          pPos[1] + rawAxis[1] * t,
+          pPos[2] + rawAxis[2] * t,
+        ];
+
+        // Radial direction for this spine — rotate a perpendicular around the
+        // branch axis by (azBase + k * GOLDEN_ANGLE) for even radial spread.
+        const azimuth    = azBase + k * GOLDEN_ANGLE;
+        const perp       = perpTo(axis);
+        const radialDir  = rotate3(perp, axis, azimuth);
+
+        // Small random azimuth jitter (1 draw per spine).
+        const azJitter  = (spineRng() - 0.5) * 0.4;
+        const finalDir  = rotate3(perp, axis, azimuth + azJitter);
+
+        // Spine tangent: radially outward from the branch — the "pointing"
+        // direction of the needle.
+        const spineTangent = norm3(finalDir);
+
+        // Spine normal: perpendicular to both branch axis and tangent so the
+        // card face is visible from the side (not edge-on to the viewer).
+        const spineNormal  = norm3(cross3(axis, spineTangent));
+
+        // Tiny random roll for natural variation (1 draw per spine).
+        const roll = (spineRng() - 0.5) * 0.5;
+
+        // Exposure: reuse the height-based metric (no rng draw).
+        const normalizedHeight = Math.max(0, Math.min(1, (spinePos[1] - crownMinY) / crownYRange));
+        const expVal = Math.max(0, Math.min(1, 0.5 * (node.branchLevel / maxBranchLevel) + 0.5 * normalizedHeight));
+
+        const i3 = count * 3;
+        position[i3]     = spinePos[0];
+        position[i3 + 1] = spinePos[1];
+        position[i3 + 2] = spinePos[2];
+        normal[i3]       = spineNormal[0];
+        normal[i3 + 1]   = spineNormal[1];
+        normal[i3 + 2]   = spineNormal[2];
+        tangent[i3]      = spineTangent[0];
+        tangent[i3 + 1]  = spineTangent[1];
+        tangent[i3 + 2]  = spineTangent[2];
+        scale[count]     = spineScale;
+        rotation[count]  = roll;
+        ageColor[count]  = node.branchLevel / maxBranchLevel;
+        exposure[count]  = expVal;
+        // boneIndex: inherit the branch's wind bone if nodeToBone is provided.
+        if (nodeToBone !== null && nodeIdx >= 0 && nodeIdx < nodeToBone.length) {
+          const bi = nodeToBone[nodeIdx];
+          boneIndex[count] = (bi >= 0) ? bi : 0;
+        }
+        count++;
+      }
     }
   }
 

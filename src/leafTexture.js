@@ -433,13 +433,312 @@ function lightenColor(cssColor, amount) {
 }
 
 // ---------------------------------------------------------------------------
+// Needle fascicle helpers — pure math, Node-safe.
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive per-needle params for a fascicle spray.
+ * Returns an array of { angle, length, width } for `count` needles.
+ * Needles splay symmetrically around straight-up (angle=0 = pointing +Y),
+ * with slight jitter so it looks organic.
+ *
+ * @param {number} seed  - integer seed (from genome structuralSeed or similar)
+ * @param {number} count - number of needles (8–20)
+ * @returns {{ angle: number, length: number, width: number }[]}
+ */
+export function needleFascicleParams(seed, count) {
+  const rng = mulberry32(seed ^ 0xC0FE1111);   // isolated sub-stream; no side-effects
+
+  // Tight splay arc: needles fan across 35° centred on +Y — narrow spiky fascicle, not a broad fan
+  const spreadRad = (35 / 180) * Math.PI;
+  const step = spreadRad / (count - 1);
+  const baseAngle = -spreadRad / 2;
+
+  return Array.from({ length: count }, (_, i) => {
+    const jitter   = (rng() - 0.5) * step * 0.4;
+    const angle    = baseAngle + i * step + jitter;
+    const length   = 0.82 + rng() * 0.18;   // relative to card height [0.82, 1.00] — long spikes filling card
+    const width    = 0.012 + rng() * 0.010;  // relative to card height [0.012, 0.022]
+    return { angle, length, width };
+  });
+}
+
+/**
+ * Draw a needle fascicle (pine/spruce style) on the canvas.
+ * All needles share a common base at (cx, cy) and splay upward.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} cx        - base x (attachment point)
+ * @param {number} cy        - base y (attachment point)
+ * @param {number} cardH     - canvas card height in pixels (needles scale to this)
+ * @param {string} fillColor - CSS color for needles
+ * @param {{ angle: number, length: number, width: number }[]} needles
+ */
+function drawNeedleFascicle(ctx, cx, cy, cardH, fillColor, needles) {
+  ctx.save();
+
+  // A short shared basal sheath: a small dark cylinder at the base.
+  const sheathH  = cardH * 0.06;
+  const sheathW  = cardH * 0.04;
+  ctx.fillStyle  = lightenColor(fillColor, -0.10);  // slightly darker
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - sheathH / 2, sheathW / 2, sheathH / 2, 0, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Draw each needle as a very thin, tapered bezier curve.
+  for (const needle of needles) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(needle.angle);           // angle=0 points straight up (+Y before canvas flip)
+
+    const nLen  = cardH * needle.length;
+    const nHalf = cardH * needle.width / 2;
+
+    // Needle shape: tapered — full width at base, zero at tip.
+    ctx.beginPath();
+    ctx.moveTo(0, 0);                   // base left
+    ctx.lineTo(-nHalf, 0);
+    // Cubic to tip — slight curve outward then in
+    ctx.bezierCurveTo(-nHalf * 0.8, -nLen * 0.4, -nHalf * 0.3, -nLen * 0.75, 0, -nLen);
+    ctx.bezierCurveTo( nHalf * 0.3, -nLen * 0.75,  nHalf * 0.8, -nLen * 0.4,  nHalf, 0);
+    ctx.closePath();
+
+    // Gradient: slightly lighter at base, colour at tip
+    const grad = ctx.createLinearGradient(0, 0, 0, -nLen);
+    grad.addColorStop(0, lightenColor(fillColor, 0.08));
+    grad.addColorStop(1, fillColor);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Midrib — a very fine line for the vein
+    ctx.strokeStyle = lightenColor(fillColor, 0.15);
+    ctx.lineWidth   = Math.max(0.3, nHalf * 0.4);
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -nLen);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Palm frond (pinnate) helpers — pure math, Node-safe.
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive per-leaflet params for a pinnate palm frond.
+ * Returns an array of { t, angle, length } for `count` leaflets along a central rachis.
+ *   t      - position along rachis [0=base, 1=tip]
+ *   angle  - outward splay angle from rachis (positive = right side; negative = left side)
+ *   length - relative leaflet length [0, 1], longest near mid-rachis, shorter at base/tip
+ *
+ * Uses XOR salt 0xF40DF00D — distinct from needle (0xC0FE1111) and broadleaf (0xDEADBEEF).
+ *
+ * @param {number} seed  - integer seed
+ * @param {number} count - total leaflet count (both sides combined; must be even)
+ * @returns {{ t: number, angle: number, length: number }[]}
+ */
+export function frondLeafletParams(seed, count) {
+  const rng = mulberry32(seed ^ 0xF40DF00D);   // isolated sub-stream; no side-effects
+
+  // Leaflets are arranged as pairs: one right (+angle), one left (-angle) per pair.
+  // t values spread from near-base (0.08) to near-tip (0.92), with slight jitter.
+  const pairCount = Math.floor(count / 2);
+  const tStep = 0.84 / (pairCount - 1);   // spread from t=0.08 to t=0.92
+  const baseT = 0.08;
+
+  // Base splay angle for leaflets from rachis: ~70° with slight organic jitter
+  const baseSplay = (70 / 180) * Math.PI;
+
+  const leaflets = [];
+  for (let i = 0; i < pairCount; i++) {
+    const tJitter = (rng() - 0.5) * tStep * 0.3;
+    const t = Math.max(0.02, Math.min(0.98, baseT + i * tStep + tJitter));
+
+    // Length envelope: bell curve peaking near the mid-rachis (t≈0.5).
+    // Leaflets at the base and tip are shorter than those in the middle.
+    const envelope = Math.sin(Math.PI * t);   // 0 at ends, 1 at center
+    const lengthJitter = (rng() - 0.5) * 0.12;
+    const length = Math.max(0.05, Math.min(1.0, 0.55 + envelope * 0.45 + lengthJitter));
+
+    // Splay angle: slight variation per pair so frond looks organic
+    const splayJitter = (rng() - 0.5) * (15 / 180) * Math.PI;
+    const angle = baseSplay + splayJitter;
+
+    // Right leaflet (+angle)
+    leaflets.push({ t, angle: +angle, length });
+    // Left leaflet (−angle) — separate jitter for slight asymmetry
+    const leftJitter = (rng() - 0.5) * (8 / 180) * Math.PI;
+    leaflets.push({ t, angle: -(angle + leftJitter), length });
+  }
+
+  return leaflets;
+}
+
+/**
+ * Draw a pinnate palm frond on the canvas.
+ * A curved, tapering central rachis runs from base (cx,cy) toward the tip,
+ * with many thin leaflets branching off both sides at a swept-back angle.
+ * Leaflets are longest near the mid-rachis and shorter toward base and tip.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} cx        - base x (attachment point)
+ * @param {number} cy        - base y (attachment point)
+ * @param {number} cardW     - card width in pixels
+ * @param {number} cardH     - card height in pixels
+ * @param {string} fillColor - CSS color for frond
+ * @param {{ t: number, angle: number, length: number }[]} leaflets
+ */
+function drawPalmFrond(ctx, cx, cy, cardW, cardH, fillColor, leaflets) {
+  ctx.save();
+
+  // Rachis: a gently curved, tapering line from base to tip.
+  // Base width ≈ 3% of cardW; tapers to a point at tip.
+  // The rachis curves slightly to the right to give a natural droop (like a real palm frond).
+  const rachisLen = cardH * 0.90;
+  const tipX = cx + cardW * 0.06;   // slight rightward lean at tip
+  const tipY = cy - rachisLen;
+
+  // Control point for the bezier curve: one-third of the way up, slightly left to create
+  // a gentle S-curve that reads as the weight of the frond bowing outward then upward.
+  const cpX = cx - cardW * 0.04;
+  const cpY = cy - rachisLen * 0.5;
+
+  // Helper: evaluate the quadratic bezier at t ∈ [0,1]
+  function bezierPt(t) {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * cx + 2 * mt * t * cpX + t * t * tipX,
+      y: mt * mt * cy + 2 * mt * t * cpY + t * t * tipY,
+    };
+  }
+
+  // Helper: tangent direction (un-normalized) at bezier t
+  function bezierTangent(t) {
+    const mt = 1 - t;
+    return {
+      x: 2 * (mt * (cpX - cx) + t * (tipX - cpX)),
+      y: 2 * (mt * (cpY - cy) + t * (tipY - cpY)),
+    };
+  }
+
+  // Draw rachis as a filled tapered shape (stem — dark version of fill color)
+  const rachisColor = lightenColor(fillColor, -0.12);
+  const rachisBaseW = cardW * 0.025;
+
+  ctx.beginPath();
+  // Left edge of rachis base, sweep to tip, right edge back to base
+  const steps = 24;
+  // Build left edge
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const pt = bezierPt(t);
+    const tan = bezierTangent(t);
+    const len = Math.sqrt(tan.x * tan.x + tan.y * tan.y) || 1;
+    const nx = -tan.y / len;  // normal pointing left
+    const ny =  tan.x / len;
+    const hw = rachisBaseW * (1 - t * 0.9);  // taper to 10% at tip
+    if (i === 0) ctx.moveTo(pt.x + nx * hw, pt.y + ny * hw);
+    else ctx.lineTo(pt.x + nx * hw, pt.y + ny * hw);
+  }
+  // Right edge (reverse)
+  for (let i = steps; i >= 0; i--) {
+    const t = i / steps;
+    const pt = bezierPt(t);
+    const tan = bezierTangent(t);
+    const len = Math.sqrt(tan.x * tan.x + tan.y * tan.y) || 1;
+    const nx = tan.y / len;   // normal pointing right
+    const ny = -tan.x / len;
+    const hw = rachisBaseW * (1 - t * 0.9);
+    ctx.lineTo(pt.x + nx * hw, pt.y + ny * hw);
+  }
+  ctx.closePath();
+  ctx.fillStyle = rachisColor;
+  ctx.fill();
+
+  // Draw each leaflet as a thin tapered blade.
+  // Leaflet base attaches to the rachis at parameter t; it extends in the direction
+  // tangent-to-rachis rotated by the splay angle, swept back (away from tip direction).
+  for (const leaflet of leaflets) {
+    const pt   = bezierPt(leaflet.t);
+    const tan  = bezierTangent(leaflet.t);
+    const tanLen = Math.sqrt(tan.x * tan.x + tan.y * tan.y) || 1;
+    // Angle of tangent from vertical (rachis direction)
+    const rachisAngle = Math.atan2(tan.x / tanLen, -tan.y / tanLen);
+
+    // Leaflet direction: rachis tangent + splay angle (leaflet.angle already encodes sign)
+    const leafletAngle = rachisAngle + leaflet.angle;
+
+    // Maximum leaflet length scales with rachis length; envelope already in [0.05,1]
+    const maxLeafletLen = rachisLen * 0.42;
+    const leafletLen    = maxLeafletLen * leaflet.length;
+    const leafletBaseW  = Math.max(1.5, leafletLen * 0.055);   // half-width at base
+
+    // Direction vector for leaflet
+    const dx = Math.sin(leafletAngle);
+    const dy = -Math.cos(leafletAngle);
+
+    ctx.save();
+    ctx.translate(pt.x, pt.y);
+
+    // Perpendicular to leaflet for width taper
+    const perpX = -dy;
+    const perpY =  dx;
+
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-perpX * leafletBaseW, -perpY * leafletBaseW);
+    // Bezier to tip — slight curve for natural look
+    const midX = dx * leafletLen * 0.55 - perpX * leafletBaseW * 0.25;
+    const midY = dy * leafletLen * 0.55 - perpY * leafletBaseW * 0.25;
+    ctx.quadraticCurveTo(midX, midY, dx * leafletLen, dy * leafletLen);
+    ctx.quadraticCurveTo(
+      dx * leafletLen * 0.55 + perpX * leafletBaseW * 0.25,
+      dy * leafletLen * 0.55 + perpY * leafletBaseW * 0.25,
+      perpX * leafletBaseW, perpY * leafletBaseW
+    );
+    ctx.closePath();
+
+    // Slight gradient from lighter base to leaf color at tip
+    const gx0 = 0;
+    const gy0 = 0;
+    const gx1 = dx * leafletLen;
+    const gy1 = dy * leafletLen;
+    const grad = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
+    grad.addColorStop(0, lightenColor(fillColor, 0.10));
+    grad.addColorStop(1, fillColor);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Thin midrib line
+    ctx.strokeStyle = lightenColor(fillColor, 0.18);
+    ctx.lineWidth   = Math.max(0.3, leafletBaseW * 0.3);
+    ctx.globalAlpha = 0.50;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(dx * leafletLen, dy * leafletLen);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 // Public API — cluster texture.
 // ---------------------------------------------------------------------------
 
 export function makeLeafClusterTexture({
   pigment, breadth = 0.5, seed = 1, resolution = 'high',
   leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4,
-  leafSerration = 0.0, leafLobing = 0.0,
+  leafSerration = 0.0, leafLobing = 0.0, needleLeaf = 0, frondLeaf = 0,
 }) {
   if (typeof document === 'undefined') {
     return null;
@@ -455,46 +754,125 @@ export function makeLeafClusterTexture({
   const [baseR, baseG, baseB] = pigmentToColor(pigment);
   const [baseH, baseS, baseL] = rgbToHsl(baseR, baseG, baseB);
 
-  // Derive superformula base params from the 5 leaf-shape genes.
-  // Width/length/tip/serration/lobing are all encoded in the params; no post X-scale.
-  const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing });
+  // ---------------------------------------------------------------------------
+  // Context-parameterized draw helpers.
+  // All module-level draw functions (drawLeaf, drawNeedleFascicle, drawPalmFrond)
+  // already accept an explicit ctx argument, so we can redirect them to any canvas.
+  // ---------------------------------------------------------------------------
 
-  const count = clusterLeafCount(seed);
-  const leaves = clusterLeafParams(seed, count);
+  function _drawBroadleafOn(target) {
+    const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing });
 
-  const attachX = SIZE / 2;
-  const attachY = SIZE - 8;
-  const leafH = SIZE * 0.55;
+    const count  = clusterLeafCount(seed);
+    const leaves = clusterLeafParams(seed, count);
 
-  const drawOrder = [...leaves]
-    .map((l, i) => ({ ...l, i }))
-    .sort((a, b) => Math.abs(b.angle) - Math.abs(a.angle));
+    const attachX = SIZE / 2;
+    const attachY = SIZE - 8;
+    const leafH   = SIZE * 0.55;
 
-  for (const leaf of drawOrder) {
-    const leafIdx = leaf.i;
-    const variantRng = mulberry32((seed * 1009 + leafIdx * 37) >>> 0);
-    const variantParams = leafVariantParams(baseParams, variantRng);
+    const drawOrder = [...leaves]
+      .map((l, i) => ({ ...l, i }))
+      .sort((a, b) => Math.abs(b.angle) - Math.abs(a.angle));
 
-    const outline = superformulaOutline(variantParams, 120);
-    const venation = growVenation(
-      outline,
-      { nSources: 60, step: 0.04, influenceRadius: 0.25, killRadius: 0.06, maxIter: 200 },
-      mulberry32((seed * 31 + leafIdx * 7) >>> 0)
-    );
+    for (const leaf of drawOrder) {
+      const leafIdx    = leaf.i;
+      const variantRng = mulberry32((seed * 1009 + leafIdx * 37) >>> 0);
+      const vp         = leafVariantParams(baseParams, variantRng);
+      const outline    = superformulaOutline(vp, 120);
+      const venation   = growVenation(
+        outline,
+        { nSources: 60, step: 0.04, influenceRadius: 0.25, killRadius: 0.06, maxIter: 200 },
+        mulberry32((seed * 31 + leafIdx * 7) >>> 0)
+      );
 
-    const h = ((baseH + leaf.hueDelta) % 1 + 1) % 1;
-    const l = Math.max(0.05, Math.min(0.95, baseL + leaf.lightDelta));
-    const [lr, lg, lb] = hslToRgb(h, baseS, l);
-    const [vr, vg, vb] = hslToRgb(h, baseS, Math.min(1, l + 0.20));
+      const h = ((baseH + leaf.hueDelta) % 1 + 1) % 1;
+      const l = Math.max(0.05, Math.min(0.95, baseL + leaf.lightDelta));
+      const [lr, lg, lb] = hslToRgb(h, baseS, l);
+      const [vr, vg, vb] = hslToRgb(h, baseS, Math.min(1, l + 0.20));
 
-    const fillColor = `rgb(${toI(lr)},${toI(lg)},${toI(lb)})`;
-    const veinColor = `rgb(${toI(vr)},${toI(vg)},${toI(vb)})`;
+      const fillColor   = `rgb(${toI(lr)},${toI(lg)},${toI(lb)})`;
+      const veinColor   = `rgb(${toI(vr)},${toI(vg)},${toI(vb)})`;
+      const bx          = attachX + leaf.ox * SIZE;
+      const by          = attachY - leaf.oy * SIZE;
+      const scaledLeafH = leafH * leaf.scale;
 
-    const bx = attachX + leaf.ox * SIZE;
-    const by = attachY - leaf.oy * SIZE;
-    const scaledLeafH = leafH * leaf.scale;
+      drawLeaf(target, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation);
+    }
+  }
 
-    drawLeaf(ctx, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation);
+  function _drawNeedlesOn(target) {
+    const needles  = needleFascicleParams(seed, 10);
+    const cardH    = SIZE * 0.80;
+    const attachX  = SIZE / 2;
+    const attachY  = SIZE - 8;
+
+    const needleH  = ((baseH + 0.01) % 1 + 1) % 1;
+    const needleL  = Math.min(0.55, Math.max(0.08, baseL - 0.04));
+    const [nr, ng, nb] = hslToRgb(needleH, baseS, needleL);
+
+    drawNeedleFascicle(target, attachX, attachY, cardH, `rgb(${toI(nr)},${toI(ng)},${toI(nb)})`, needles);
+  }
+
+  function _drawFrondOn(target) {
+    const leaflets = frondLeafletParams(seed, 20);
+    const attachX  = SIZE / 2;
+    const attachY  = SIZE - 8;
+
+    const frondH   = ((baseH - 0.01 + 1) % 1);
+    const frondL   = Math.min(0.60, Math.max(0.10, baseL + 0.02));
+    const [fr, fg, fb] = hslToRgb(frondH, baseS, frondL);
+
+    drawPalmFrond(target, attachX, attachY, SIZE, SIZE, `rgb(${toI(fr)},${toI(fg)},${toI(fb)})`, leaflets);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helper: draw a layer to a scratch canvas, then stamp onto main at `alpha`.
+  // Used only for blend values strictly between 0 and 1 — pure-endpoint paths
+  // draw directly to avoid any drawImage compositing artefacts.
+  // ---------------------------------------------------------------------------
+  function _stampAt(drawFn, alpha) {
+    const scratch  = document.createElement('canvas');
+    scratch.width  = SIZE;
+    scratch.height = SIZE;
+    drawFn(scratch.getContext('2d'));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(scratch, 0, 0);
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dispatch:
+  //   needleLeaf===0 && frondLeaf===0  → broadleaf directly (byte-identical).
+  //   needleLeaf===1                   → needles directly (byte-identical).
+  //   frondLeaf===1  (needleLeaf===0)  → frond directly (byte-identical).
+  //   0 < needleLeaf < 1               → crossfade: broadleaf + needles via scratch.
+  //   0 < frondLeaf  < 1               → crossfade: broadleaf + frond via scratch.
+  //
+  // Precedence: needleLeaf wins over frondLeaf when both > 0.
+  // ---------------------------------------------------------------------------
+
+  if (needleLeaf === 0 && frondLeaf === 0) {
+    // Pure broadleaf — no changes to any draw call paths.
+    _drawBroadleafOn(ctx);
+
+  } else if (needleLeaf === 1) {
+    // Pure needle — draw directly, byte-identical to the old needleLeaf > 0.5 path.
+    _drawNeedlesOn(ctx);
+
+  } else if (needleLeaf > 0) {
+    // Blend: broadleaf at (1-needleLeaf), needles at needleLeaf.
+    _stampAt(sctx => _drawBroadleafOn(sctx), 1 - needleLeaf);
+    _stampAt(sctx => _drawNeedlesOn(sctx),   needleLeaf);
+
+  } else if (frondLeaf === 1) {
+    // Pure frond — draw directly, byte-identical to the old frondLeaf > 0.5 path.
+    _drawFrondOn(ctx);
+
+  } else {
+    // frondLeaf > 0 && frondLeaf < 1: blend broadleaf + frond.
+    _stampAt(sctx => _drawBroadleafOn(sctx), 1 - frondLeaf);
+    _stampAt(sctx => _drawFrondOn(sctx),     frondLeaf);
   }
 
   return { source: canvas, width: SIZE, height: SIZE };

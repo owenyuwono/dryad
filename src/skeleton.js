@@ -393,16 +393,22 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
     trunkHeight    = 0.5,   // [0,1] — overall vertical stature; 0.5 = identity (1.0× factor)
   } = genome;
 
+  // Defensive reads for new genes — identity/no-op at 0.
+  const stemSpread = genome.stemSpread ?? 0; // [0,1] — basal footprint radius for multi-stem shrubs
+  const rosette    = genome.rosette    ?? 0; // [0,1] — apical whorl frond count (fern/palm crown)
+
   // ---------------------------------------------------------------------------
-  // trunkHeightFactor: piecewise linear mapping so f(0.5) = exactly 1.0 (identity).
-  //   [0,   0.5]: f(t) = 0.45 + t * 1.10  → f(0)=0.45, f(0.5)=1.00
-  //   [0.5, 1.0]: f(t) = 1.00 + (t-0.5)*1.40 → f(0.5)=1.00, f(1)=1.70
+  // trunkHeightFactor: piecewise mapping so f(0.5) = exactly 1.0 (identity).
+  //   [0,   0.5]: f(t) = 0.45 + t * 1.10                → f(0)=0.45, f(0.5)=1.00 (unchanged)
+  //   [0.5, 1.0]: f(t) = 10^(2*(t-0.5))  (exponential)  → f(0.5)=1.00, f(1)=10.0
+  // The upper half is exponential so the slider tops out at ~10× height while the
+  // identity point (0.5 → 1.0×) is bit-exact (10^0 === 1). Monotonic on both halves.
   // Multiplied onto both TRUNK_HEIGHT and BASE_BRANCH_LENGTH so the whole plant
   // scales uniformly in height. No rng draws consumed; no genome draw shifted.
   // ---------------------------------------------------------------------------
   const trunkHeightFactor = trunkHeight <= 0.5
     ? 0.45 + trunkHeight * 1.10
-    : 1.00 + (trunkHeight - 0.5) * 1.40;
+    : Math.pow(10, 2 * (trunkHeight - 0.5));
 
   // -------------------------------------------------------------------------
   // Derive integer structural parameters from continuous genes.
@@ -456,6 +462,14 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   // Set to MAX_BONES - 20 to leave room for trunk bones (≤35). Root system is out-of-band
   // (added by roots.js after buildSkeleton returns; uses a separate ROOT_BONE_BUDGET).
   const SOFT_CEILING = MAX_BONES - 20;
+
+  // MAX_FOOTPRINT: maximum basal footprint radius (world units) at stemSpread=1, weight=1.
+  // 0.6 gives a natural shrub spread without disconnecting visually from the origin.
+  const MAX_FOOTPRINT = 0.6;
+
+  // ROSETTE_MAX: maximum frond count for a full rosette (rosette=1).
+  // 12 gives a lush palm/fern crown while staying within budget.
+  const ROSETTE_MAX = 12;
 
   // -------------------------------------------------------------------------
   // RNG draw 1: trunkBend (lateral X arc)
@@ -533,21 +547,20 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   const allTrunkTops = []; // { idx: nodeIdx, weight: radiusScale }
 
   // -------------------------------------------------------------------------
-  // SINGLE-ORIGIN INVARIANT: ALL basal stems must start at (0,0,0).
+  // MULTI-STEM POSITIONING: stemSpread controls basal footprint.
   //
-  // Previous code spread multi-stem origins at spreadRadius from centre, which
-  // produced visually disconnected trunks for any genome with tillering > 0.
+  // stemSpread === 0 → all stems share origin (0,0,0): BYTE-IDENTICAL to prior code.
+  // stemSpread > 0   → each stem base is placed on a ring of radius
+  //   R = stemSpread * MAX_FOOTPRINT * weight, using the already-drawn stemAzimuths[s].
+  //   Base node i=0 in buildTrunk starts at basePos (no sin-term offset at t=0),
+  //   so the footprint ring is applied at ground level.
   //
-  // Fix: all stems share origin (0,0,0). Multi-stem / tillering plants fan
-  // outward as they grow (their trunk curves via trunkBend/trunkLean with
-  // stem-specific azimuth jitter applied ABOVE the base), not at the base itself.
-  //
-  // For tillering > 0: each extra stem still gets a unique azimuth, which is
-  // baked into the trunkBend (lateral) component per stem so they diverge above
-  // the shared ground point. The crossfade weight still controls radius+height.
+  // SINGLE-STEM EXCEPTION: if totalStems === 1, the base ALWAYS stays at origin
+  // for ALL stemSpread values (a lone stem has no footprint to spread). This keeps
+  // every tree preset byte-identical regardless of stemSpread.
   // -------------------------------------------------------------------------
   if (totalStems === 1) {
-    // Single stem: center position, no azimuth divergence.
+    // Single stem: center position, no azimuth divergence, no footprint spread.
     const ti = buildTrunk([0, 0, 0], 1.0, 0);
     allTrunkTops.push({ idx: ti[ti.length - 1], weight: 1.0 });
   } else {
@@ -555,9 +568,11 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       const az = stemAzimuths[s];
       const isCrossfade = s === fullStems;
       const weight = isCrossfade ? stemFrac : 1.0;
-      // All stems share origin (0,0,0). The azimuth is passed so buildTrunk
-      // can fan the stem outward from the shared base point.
-      const ti = buildTrunk([0, 0, 0], weight, az);
+      // Footprint: spread base outward from origin along the stem's azimuth.
+      // At stemSpread=0 → R=0 → basePos=(0,0,0) → byte-identical to prior code.
+      const R = stemSpread * MAX_FOOTPRINT * weight;
+      const basePos = [Math.cos(az) * R, 0, Math.sin(az) * R];
+      const ti = buildTrunk(basePos, weight, az);
       allTrunkTops.push({ idx: ti[ti.length - 1], weight });
     }
   }
@@ -624,21 +639,225 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   //   All draws for crossfade child are consumed even when it won't change
   //   topology (determinism invariant).
   // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Constants for tiered whorl emission (moved from post-pass, now BFS-integrated).
+  // ---------------------------------------------------------------------------
+  const WHORL_MAX_TIERS          = 9;    // maximum number of tiers at whorl=1
+  const WHORL_BRANCHES_PER_TIER  = 7;    // branches emitted per tier
+  const WHORL_START_FRAC_MAX     = 0.55; // at whorl=1 the bare trunk starts at 55% height
+  const WHORL_TRUNK_END_FRAC     = 0.95; // upper bound for tier placement
+  const WHORL_BASE_LEN_FRAC      = 0.40; // base tier branch length as fraction of trunk span
+  const WHORL_TOP_LEN_FRAC       = 0.10; // top tier branch length as fraction of trunk span
+  const INTER_TIER_OFFSET        = Math.PI / WHORL_BRANCHES_PER_TIER; // per-tier azimuth rotation offset
+  const WHORL_CROWN_ANGLE        = 0.25; // rad from vertical near crown (upswept)
+  const WHORL_BASE_ANGLE         = 1.15; // rad from vertical near base (near-horizontal / slight droop)
+
   const queue = [];
 
-  for (const { idx: topIdx, weight } of allTrunkTops) {
-    queue.push({
-      nodeIdx: topIdx,
-      level: 0,
-      dir: [0, 1, 0],
-      // BASE_BRANCH_LENGTH × TRUNK_HEIGHT gives the primary branch reach.
-      // At each successive depth level this is multiplied by lengthRatio so
-      // branches taper naturally inward toward the fine twigs.
-      len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor,
-      attachPos: [...nodes[topIdx].pos],
-      radiusScale: weight,
-      childIndex: 0   // deterministic curvature key: which child of its parent is this?
-    });
+  const whorl = genome.whorl ?? 0;
+
+  if (whorl > 0 && allTrunkTops.length > 0) {
+    // ----- Collect trunk chain from dominant (first) stem in ascending-Y order -----
+    const dominantTrunkTopIdx = allTrunkTops[0].idx;
+    const trunkChain = []; // { nodeIdx, y }
+    {
+      let cur = dominantTrunkTopIdx;
+      while (cur !== -1) {
+        const n = nodes[cur];
+        if (!n.isStem) break;
+        trunkChain.push({ nodeIdx: cur, y: n.pos[1] });
+        cur = n.parentIdx ?? -1;
+      }
+      trunkChain.reverse(); // base → top (ascending Y)
+    }
+
+    if (trunkChain.length >= 2) {
+      const trunkBaseY = trunkChain[0].y;
+      const trunkTopY  = trunkChain[trunkChain.length - 1].y;
+      const trunkSpan  = trunkTopY - trunkBaseY;
+
+      // startFrac: fraction of trunk height where tiers begin.
+      // Lerp from 0 (whorl→0: tiers anywhere) to WHORL_START_FRAC_MAX (whorl=1: lower 55% bare).
+      const startFrac = lerp(0.0, WHORL_START_FRAC_MAX, whorl);
+
+      // CROSSFADE tier count — mirrors tillering/depth crossfade pattern.
+      //
+      //   tierCountFloat = whorl * WHORL_MAX_TIERS   (continuous, ∈ [0, WHORL_MAX_TIERS])
+      //   fullTiers      = floor(tierCountFloat)       (integer number of fully-weighted tiers)
+      //   whorlTierFrac  = tierCountFloat - fullTiers  (∈ [0,1): crossfade weight for the +1 tier)
+      //
+      // Tiers 0..fullTiers-1: radius = whorlBaseRadius (full weight, 1.0).
+      // Tier   fullTiers    : radius = whorlBaseRadius * whorlTierFrac (grows from ~0 as whorl rises).
+      //
+      // At whorl→0+: tierCountFloat→0+, fullTiers=0, whorlTierFrac→0+ → single partial tier
+      //              with branches at ~0 radius → invisible → NO pop at the 0-boundary.
+      // At whorl=1:  tierCountFloat=9, fullTiers=9, whorlTierFrac=0 → 9 full tiers, no partial.
+      const tierCountFloat = whorl * WHORL_MAX_TIERS;
+      const fullTiers      = Math.floor(tierCountFloat);
+      const whorlTierFrac  = tierCountFloat - fullTiers;
+
+      // Total tiers to emit: full tiers + 1 crossfade tier (when frac > 0).
+      const N_tiers = fullTiers + (whorlTierFrac > 0 ? 1 : 0);
+
+      // Primary branch length at base tier.
+      const primaryLen = BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor;
+
+      for (let ti = 0; ti < N_tiers; ti++) {
+        // Stop early if budget is fully consumed.
+        if (boneCounter >= SOFT_CEILING) break;
+
+        // Crossfade weight for this tier's branch radii/lengths.
+        // Only the last (newest) tier — index fullTiers — gets the fractional scale.
+        // All prior tiers are full-weight (1.0).
+        const isCrossfadeTier = ti === fullTiers && whorlTierFrac > 0;
+        const tierRadiusScale = isCrossfadeTier ? whorlTierFrac : 1.0;
+
+        // Even spacing within [startFrac, WHORL_TRUNK_END_FRAC].
+        // Use N_tiers > 1 guard; for the partial single-tier case (fullTiers=0, N_tiers=1) use 0.5.
+        const tierPosFrac = N_tiers > 1 ? ti / (N_tiers - 1) : 0.5;
+        const frac = startFrac + (WHORL_TRUNK_END_FRAC - startFrac) * tierPosFrac;
+        const targetY = trunkBaseY + frac * trunkSpan;
+
+        // Snap to the nearest existing trunk-chain node at or ABOVE targetY.
+        // Snapping upward (ceil snap) preserves the "lower trunk bare" invariant —
+        // no tier can attach below startFrac even when trunk node spacing is coarse.
+        let snapIdx = -1;
+        let bestDist = Infinity;
+        for (const tc of trunkChain) {
+          if (tc.y < targetY - 1e-6) continue; // skip nodes strictly below target
+          const d = tc.y - targetY; // distance above (non-negative)
+          if (d < bestDist) {
+            bestDist = d;
+            snapIdx = tc.nodeIdx;
+          }
+        }
+        // Fallback: if no node is at or above (trunk is shorter than expected), use the topmost.
+        if (snapIdx === -1) snapIdx = trunkChain[trunkChain.length - 1].nodeIdx;
+
+        const snapNode = nodes[snapIdx];
+        const snapPos  = snapNode.pos;
+
+        // Branch length: conical silhouette — base tier longest, top tier shortest.
+        // heightRatio=1 at base (tierPosFrac=0), 0 at crown (tierPosFrac=1).
+        // conicalShape multiplier makes the taper more pronounced/curved.
+        // Scale crossfade tier length by tierRadiusScale so it grows in from near-zero.
+        const heightRatio = 1 - tierPosFrac;
+        const conicalShape = 0.2 + 0.8 * heightRatio; // 1.0 at base, 0.2 at top
+        const tierBranchLen = trunkSpan * lerp(WHORL_TOP_LEN_FRAC, WHORL_BASE_LEN_FRAC, heightRatio)
+          * conicalShape * tierRadiusScale;
+
+        // Polar angle: lerp from base-angle (tierPosFrac=0) to crown-angle (tierPosFrac=1).
+        // No rng draw — fully deterministic from tierPosFrac.
+        const tierPolarAngle = lerp(WHORL_BASE_ANGLE, WHORL_CROWN_ANGLE, tierPosFrac);
+
+        // Azimuth jitter: 0 at whorl=1 (perfect regularity), full at whorl=0.
+        const whorlJitter = 0.4; // base jitter magnitude (radians)
+
+        // Emit WHORL_BRANCHES_PER_TIER spokes at evenly-distributed azimuths.
+        // Tier rotation: rotate the whole spoke set by INTER_TIER_OFFSET per tier.
+        // ZERO rng draws: azimuth derived deterministically from structuralSeed + tierIdx + k.
+        const tierRotation = ti * INTER_TIER_OFFSET;
+
+        // Base radius for whorl branches at full weight.
+        const whorlBaseRadius = BRANCH_BASE_RADIUS * Math.pow(TAPER_BASE, 1);
+
+        for (let bi = 0; bi < WHORL_BRANCHES_PER_TIER; bi++) {
+          if (boneCounter >= SOFT_CEILING) break;
+
+          // Base azimuth: regular spoke spacing.
+          const baseAz = (Math.PI * 2 * bi) / WHORL_BRANCHES_PER_TIER + tierRotation;
+          // Deterministic jitter: derived from structuralSeed + tier + branch index.
+          // Uses sin hash — no rng draw consumed.
+          const jitterHash = Math.sin(structuralSeed * 6.2831 + ti * 7.3 + bi * 2.9999) * whorlJitter * (1 - whorl);
+          const az = baseAz + jitterHash;
+
+          // Branch direction: angled outward from vertical at tierPolarAngle (varies by height).
+          const branchDir = normalize([
+            Math.sin(tierPolarAngle) * Math.cos(az),
+            Math.cos(tierPolarAngle),
+            Math.sin(tierPolarAngle) * Math.sin(az)
+          ]);
+
+          // Build the first internode chain from snapPos along branchDir.
+          const childKey = ti * WHORL_BRANCHES_PER_TIER + bi;
+          const arcAngle   = computeCurvatureArc(structuralSeed, childKey, 1);
+          const arcAxis    = computeCurvatureAxis(branchDir, structuralSeed, childKey, 1);
+          const droopPerSeg = 0.04;
+          const segLen = tierBranchLen / intNodes;
+
+          const chainNodes = buildCurvedChain(
+            snapPos, branchDir, segLen, intNodes,
+            arcAngle, arcAxis, droopPerSeg, 0, perpTo(branchDir),
+            tierRadiusScale, 1
+          );
+
+          // Branch radius: full base radius × crossfade weight for the partial tier.
+          const whorlRadius = whorlBaseRadius * tierRadiusScale;
+          let prevIdx = snapIdx;
+          for (const cn of chainNodes) {
+            if (boneCounter >= SOFT_CEILING) break;
+            const newIdx = nodes.length;
+            nodes.push({
+              pos: cn.pos,
+              radius: whorlRadius,
+              weight: tierRadiusScale,
+              branchLevel: 1,
+              parentIdx: prevIdx,
+              isWoody: true
+            });
+            bones.push({ a: prevIdx, b: newIdx });
+            boneCounter++;
+            prevIdx = newIdx;
+          }
+
+          // Enqueue the tail of this chain into the BFS at level=1 so sub-branching
+          // and foliage placement happen through the normal BFS recursion.
+          // Crossfade tier branches carry their radiusScale into the BFS subtree.
+          const tierTailIdx = nodes.length - 1;
+          if (tierTailIdx !== snapIdx) {
+            const tierFinalDir = chainNodes[chainNodes.length - 1].dir;
+            queue.push({
+              nodeIdx: tierTailIdx,
+              level: 1,
+              dir: tierFinalDir,
+              len: tierBranchLen * (lengthRatio),
+              attachPos: [...nodes[tierTailIdx].pos],
+              radiusScale: tierRadiusScale,
+              childIndex: childKey
+            });
+          }
+        }
+      }
+    }
+
+    // Leader: always enqueue the dominant trunk top so the spire continues to climb.
+    for (const { idx: topIdx, weight } of allTrunkTops) {
+      queue.push({
+        nodeIdx: topIdx,
+        level: 0,
+        dir: [0, 1, 0],
+        len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor,
+        attachPos: [...nodes[topIdx].pos],
+        radiusScale: weight,
+        childIndex: 0
+      });
+    }
+  } else {
+    // whorl === 0: byte-identical path — enqueue trunk tops exactly as before.
+    for (const { idx: topIdx, weight } of allTrunkTops) {
+      queue.push({
+        nodeIdx: topIdx,
+        level: 0,
+        dir: [0, 1, 0],
+        // BASE_BRANCH_LENGTH × TRUNK_HEIGHT gives the primary branch reach.
+        // At each successive depth level this is multiplied by lengthRatio so
+        // branches taper naturally inward toward the fine twigs.
+        len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor,
+        attachPos: [...nodes[topIdx].pos],
+        radiusScale: weight,
+        childIndex: 0   // deterministic curvature key: which child of its parent is this?
+      });
+    }
   }
 
   let queueHead = 0;
@@ -856,6 +1075,93 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
           radiusScale: childRadiusScale,
           childIndex: lateralChildIdx
         });
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // ROSETTE POST-PASS: apical whorl of equal-length fronds from the trunk top.
+  //
+  // Mirrors the roots.js pattern: runs AFTER the BFS loop so it never perturbs
+  // any BFS rng draw. ALL rng draws are gated behind rosette > 0 so that
+  // rosette === 0 consumes ZERO draws → BYTE-IDENTICAL skeleton to prior code.
+  //
+  // N = round(rosette * ROSETTE_MAX) fronds are distributed evenly in azimuth
+  // (2π/N spacing) from the TRUNK TOP node of the FIRST (dominant) stem.
+  // Frond length matches the primary branch length at depth 0 (BASE_BRANCH_LENGTH
+  // × TRUNK_HEIGHT × trunkHeightFactor), scaled by lengthRatio so it reads as
+  // a natural extension. Budget is respected: stop adding fronds at SOFT_CEILING.
+  //
+  // parentIdx < ownIndex is maintained because frond nodes are appended after
+  // the trunk-top node (which was placed during the BFS-predecessor trunk build).
+  // -------------------------------------------------------------------------
+  if (rosette > 0 && allTrunkTops.length > 0) {
+    const N = Math.max(1, Math.round(rosette * ROSETTE_MAX));
+    // Use the first (dominant) trunk top as the attachment point.
+    const trunkTopIdx = allTrunkTops[0].idx;
+    const trunkTopNode = nodes[trunkTopIdx];
+    const trunkTopPos = trunkTopNode.pos;
+
+    // Frond length: one lengthRatio step below the primary branch length.
+    const frondLen = BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor * lengthRatio;
+    const frondSegLen = frondLen / intNodes;
+
+    // Radius for rosette fronds: same taper as level-1 branches.
+    const frondRadius = BRANCH_BASE_RADIUS * Math.pow(TAPER_BASE, 1);
+
+    // Build N fronds evenly spaced in azimuth.
+    for (let fi = 0; fi < N; fi++) {
+      // Stop if bone budget is exhausted.
+      if (boneCounter >= SOFT_CEILING) break;
+
+      // Evenly distributed azimuth: 2π * fi / N (no rng draw — deterministic).
+      const az = (Math.PI * 2 * fi) / N;
+
+      // Frond direction: angled outward from vertical (branchAngle) at azimuth az.
+      // Use a fixed spread angle (branchAngle gene) for a natural whorl.
+      const frondAngle = branchAngle; // radians from vertical
+      const frondDir = normalize([
+        Math.sin(frondAngle) * Math.cos(az),
+        Math.cos(frondAngle),
+        Math.sin(frondAngle) * Math.sin(az)
+      ]);
+
+      // Deterministic curvature for this frond — no rng draws.
+      const arcAngle = computeCurvatureArc(structuralSeed, fi, 1);
+      const arcAxis  = computeCurvatureAxis(frondDir, structuralSeed, fi, 1);
+      const droopPerSeg = 0.04;
+      // No wiggle for rosette fronds (no rng draws to reuse here — keep zero).
+      const wigglePerSeg = 0;
+      const wiggleAxis   = perpTo(frondDir);
+
+      const chainNodes = buildCurvedChain(
+        trunkTopPos, frondDir, frondSegLen, intNodes,
+        arcAngle, arcAxis, droopPerSeg, wigglePerSeg, wiggleAxis,
+        1.0, 1
+      );
+
+      let prevIdx = trunkTopIdx;
+      for (const cn of chainNodes) {
+        if (boneCounter >= SOFT_CEILING) break;
+        const newIdx = nodes.length;
+        nodes.push({
+          pos: cn.pos,
+          radius: frondRadius,
+          weight: 1.0,
+          branchLevel: 1,
+          parentIdx: prevIdx,
+          isWoody: true
+        });
+        bones.push({ a: prevIdx, b: newIdx });
+        boneCounter++;
+        prevIdx = newIdx;
+      }
+
+      // Mark the tail node as terminal. prevIdx is the last node we placed
+      // (could be a partial chain if budget was hit mid-way).
+      // Only mark if we actually placed at least one frond node.
+      if (prevIdx !== trunkTopIdx) {
+        markTerminal(prevIdx, frondDir, trunkTopPos);
       }
     }
   }

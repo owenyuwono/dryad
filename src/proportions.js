@@ -28,7 +28,9 @@
 //   branchAngle   — branch spread angle (skeleton-owned, read but not applied here)
 //   lengthRatio   — limb length ratio (skeleton-owned, read but not applied here)
 //   apicalBias    — apical dominance (skeleton-owned, read but not applied here)
-//   droopBias     — extra droop bias (skeleton-owned, read but not applied here)
+//   droopBias     — additive signed droop bias ∈ [-0.2,0.4]; +→more droop (tips lower),
+//                   −→upsweep (tips higher). IDENTITY = 0 (no-op). Scaled by branchLevel
+//                   and DROOP_BIAS_GAIN, applied additively to BOTH droop loops.
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -87,6 +89,13 @@ function rotateAroundAxis(v, k, theta) {
 // Smooth clamped power: g=1 → 1.0. Keeps behaviour predictable at extremes.
 function gravPow(g, exp) {
   return Math.pow(Math.max(0.05, g), exp);
+}
+
+// Symmetric clamp: limit x to [-limit, +limit]. At x=0 returns exactly 0.
+function clampSym(x, limit) {
+  if (x > limit) return limit;
+  if (x < -limit) return -limit;
+  return x;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +385,14 @@ export function solveProportions(graph, envelope, genome = null) {
   //   effectiveTaper = taperResolved + (1.0 - taperResolved) * succulence
   const TAPER = taperResolved + (1.0 - taperResolved) * succulenceGene;
 
+  // trunkTaper ∈ [0,1]: blends the trunk-segment effective taper toward 1.0 (cylindrical).
+  // Applied ONLY to branchLevel=0 nodes in the forward pipe-model pass.
+  // 0 = identity (exact same taper as before — TAPER unchanged); 1 = perfectly cylindrical.
+  // At trunkTaper=0 (default), trunkSegTaper === TAPER → no change to any existing tree.
+  const trunkTaperGene = (genome !== null && genome.trunkTaper !== undefined)
+    ? genome.trunkTaper
+    : 0.0;
+
   // stemGirth ∈ [0,1]: overall stem thickness multiplier → [0.5, 2.0]
   const stemGirthGene = (genome !== null && genome.stemGirth !== undefined)
     ? genome.stemGirth
@@ -406,6 +423,18 @@ export function solveProportions(graph, envelope, genome = null) {
   // Mean tip elevation DECREASES monotonically as verticality increases. ✓
   const vertAngle = (0.5 - verticalityGene) * Math.PI;
 
+  // droopBias ∈ [-0.2,0.4] (schema range): additive SIGNED radians bias to the per-node
+  // droop, composed into BOTH droop loops (terminal + woody) and scaled by branchLevel.
+  //   POSITIVE droopBias → more droop (tips lower).
+  //   NEGATIVE droopBias → upsweep (tips higher).
+  // IDENTITY = 0 → the added term is exactly 0 → output BYTE-IDENTICAL to the prior
+  // inert behaviour. Defensive read so a genome without the field is treated as 0.
+  // Per-node bias = droopBiasGene * branchLevel * DROOP_BIAS_GAIN. The trunk chain
+  // (branchLevel 0) is never biased (factor 0), matching the existing droop loops which
+  // only act on branchLevel > 0.
+  const droopBiasGene = (genome && genome.droopBias !== undefined) ? genome.droopBias : 0;
+  const DROOP_BIAS_GAIN = 0.6;  // rad per branchLevel at |droopBias|=1
+
   // -------------------------------------------------------------------------
   // RADIUS CONCEPT 1: Absolute trunk-base radius from physics only.
   //   thickness ∝ g^(1/3)  (cross-section must support mass ~ g)
@@ -414,10 +443,26 @@ export function solveProportions(graph, envelope, genome = null) {
   // At g=1, defaults (wind=0.2, aridity=0.35): stemBaseRadius = 0.20
   // New wind+aridity factors compose multiplicatively with gravity+medium.
   // Genome succulence and stemGirth compose multiplicatively on top.
+  //
+  // woodiness ∈ [0,1]: scales the dominant trunk thickness contribution.
+  //   woodiness=1 (or absent) → exact identity (guard prevents float drift).
+  //   woodiness=0 → trunk radius multiplied by WOODINESS_LOW (~0.25 = near-twig thin).
+  //   Applied ONLY to the trunk/stem base radius, not root flare or twig radii.
+  //   The pipe-model taper propagates from this reduced base, so branch radii
+  //   also scale proportionally while keeping all pipe-model invariants intact.
   // -------------------------------------------------------------------------
+  const WOODINESS_LOW  = 0.25;
+  const woodinessGene  = (genome !== null && genome.woodiness !== undefined)
+    ? genome.woodiness
+    : 1.0;
+  const woodinessTrunkMod = woodinessGene >= 1
+    ? 1
+    : WOODINESS_LOW + woodinessGene * (1 - WOODINESS_LOW);
+
   const stemThicknessFactor = gravPow(gravity, 1 / 3) * stemMediumMod
                               * stemWindRadiusMod * stemAridRadiusMod
-                              * succulenceStemMod * stemGirthMod;
+                              * succulenceStemMod * stemGirthMod
+                              * woodinessTrunkMod;
   const stemBaseRadius      = 0.20 * stemThicknessFactor;
 
   // -------------------------------------------------------------------------
@@ -481,7 +526,8 @@ export function solveProportions(graph, envelope, genome = null) {
   //   Mapping: photoAngle = 0.40 * g^(-0.45)
   //   At g=1: 0.40 rad (~23°). Low g (g=0.1): ~0.80 rad. High g (g=3): ~0.24 rad.
   // -------------------------------------------------------------------------
-  const photoAngle = 0.40 * gravPow(gravity, -0.45);
+  const phototropism = genome?.phototropism ?? 1.0;
+  const photoAngle = 0.40 * gravPow(gravity, -0.45) * phototropism;
 
   // -------------------------------------------------------------------------
   // Woody droop per branchLevel.
@@ -647,9 +693,18 @@ export function solveProportions(graph, envelope, genome = null) {
     const siblings = childrenOf[parentIdx];
     const c = siblings.length;
 
+    // For trunk nodes (branchLevel 0), blend effective taper toward 1.0 by trunkTaper.
+    // At trunkTaper=0: effectiveTaper === TAPER (identity, byte-identical output).
+    // At trunkTaper=1: effectiveTaper === 1.0 (cylindrical trunk, top ≈ base radius).
+    // parent.branchLevel drives the blend — the PARENT being branchLevel 0 means
+    // n (the child) is also on the trunk chain (trunk segments connect 0→0 nodes).
+    const effectiveTaper = (parent.branchLevel === 0 && trunkTaperGene > 0)
+      ? TAPER + (1.0 - TAPER) * trunkTaperGene
+      : TAPER;
+
     if (c === 1) {
       // Single child on this parent: straightforward taper.
-      n.radius = rParent * TAPER;
+      n.radius = rParent * effectiveTaper;
     } else {
       // Multiple children: identify the leader (smallest direction divergence).
       // Leader identification uses the direction from parent's parent → parent
@@ -687,7 +742,7 @@ export function solveProportions(graph, envelope, genome = null) {
         }
       }
 
-      const rLeader = rParent * TAPER;
+      const rLeader = rParent * effectiveTaper;
       const residualSq = Math.max(0, rParent * rParent - rLeader * rLeader);
       const nLaterals = c - 1;
       const rLateral = nLaterals > 0 ? Math.sqrt(residualSq / nLaterals) : 0;
@@ -763,12 +818,23 @@ export function solveProportions(graph, envelope, genome = null) {
       // branchLevel=0 (trunk chain) → ×1.0; branchLevel=3 → ×1.9; branchLevel=5 → ×2.5.
       //
       // At genome=null: vertAngle=0, rigidityDroopScale=1.0 → droopAngle=droopPhysicsBase.
-      const tipAccumFactor = 1.0 + (n.branchLevel !== undefined ? n.branchLevel : 0) * TIP_ACCUM;
+      const tBranchLevel   = (n.branchLevel !== undefined ? n.branchLevel : 0);
+      const tipAccumFactor = 1.0 + tBranchLevel * TIP_ACCUM;
       // Clamp per-node droop to π/2 so tips never rotate past straight-down.
       // Without this, extreme gravity + high tip accumulation can overshoot vertical,
       // which breaks monotonicity and looks wrong (branches swinging back up).
       const droopAngle     = Math.min(Math.PI / 2, droopPhysicsBase * tipAccumFactor * rigidityDroopScale);
-      const totalDroopAngle = vertAngle + droopAngle;
+      // droopBias additive signed term, scaled by branchLevel so it grows toward the tips.
+      // SIGN NOTE: this terminal loop rotates about cross(downDir, rawOffset) and then a
+      // phototropism step lifts the drooped offset — so in this loop a LARGER totalDroopAngle
+      // actually RAISES the tip (more photo lift), as the rigidity test documents. To make
+      // POSITIVE droopBias lower the tip (consistent with the woody loop below), we SUBTRACT
+      // the bias here. Clamped to ±π/2 so the bias alone can't overshoot. droopBias=0 → 0 (no-op).
+      const droopBiasAngle = clampSym(
+        droopBiasGene * tBranchLevel * DROOP_BIAS_GAIN,
+        Math.PI / 2
+      );
+      const totalDroopAngle = vertAngle + droopAngle - droopBiasAngle;
 
       let kDroop = vecCross(downDir, rawOffset);
       const kDroopLen = vecLen(kDroop);
@@ -830,7 +896,16 @@ export function solveProportions(graph, envelope, genome = null) {
 
       // Per-level droop: higher branchLevel → larger droop angle (tips sag more than primaries).
       // woodyDroopAngle = woodyDroopBase * branchLevel
-      const woodyDroopAngle = woodyDroopBase * n.branchLevel;
+      // droopBias adds a signed per-level term in the SAME convention as this loop
+      // (axis cross(rawOffset, downDir): positive angle tilts the offset toward down,
+      // so + droopBias → more droop, − droopBias → upsweep). Scaled by branchLevel like
+      // the base droop. Clamped to ±π/2 so the bias alone can't overshoot vertical.
+      // At droopBias=0 the bias term is 0 → woodyDroopAngle unchanged (byte-identical no-op).
+      const woodyDroopBiasAngle = clampSym(
+        droopBiasGene * n.branchLevel * DROOP_BIAS_GAIN,
+        Math.PI / 2
+      );
+      const woodyDroopAngle = woodyDroopBase * n.branchLevel + woodyDroopBiasAngle;
 
       // Compose into a single Rodrigues rotation.
       // To rotate rawOffset TOWARD downDir: axis = normalize(rawOffset × downDir).

@@ -2,6 +2,7 @@ import { randomGenome, resolve }          from './genome.js';
 import { createViewer }                   from './viewer.js';
 import { createRenderModeController }     from './renderModes.js';
 import { TREE_DEFAULT, PRESETS }          from './presets.js';
+import { pigmentToColor }                 from './colorRamp.js';
 
 // =============================================================================
 // MODULE STATE
@@ -15,18 +16,19 @@ let genome = null;   // current specimen's full gene vector (incl. structuralSee
 // =============================================================================
 const MORPH_GENES = [
   // Form
-  'branchiness', 'branchFactorN', 'tillering', 'radialOrder',
+  'branchiness', 'branchFactorN', 'tillering', 'radialOrder', 'whorl',
   // Stem
-  'succulence', 'stemGirth', 'taper', 'ribbing', 'segmentation', 'spininess',
+  'succulence', 'stemGirth', 'taper', 'ribbing', 'segmentation', 'spininess', 'woodiness',
   // Appendage
-  'appendageBreadth', 'appendageDensity',
+  'appendageBreadth', 'appendageDensity', 'tipTuft',
   // Posture
   'verticality', 'rigidity', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
-  'weep', 'trunkHeight',
+  'weep', 'trunkHeight', 'trunkTaper',
   // Cosmetic
   'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
   'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
   'barkColor', 'barkPattern',
+  'needleLeaf', 'leafScale', 'frondLeaf',
   // Roots
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -38,14 +40,17 @@ const GENE_SLIDER_ID = {
   branchFactorN:    'branchFactorNSlider',
   tillering:        'tilleringSlider',
   radialOrder:      'radialOrderSlider',
+  whorl:            'whorlSlider',
   succulence:       'succulenceSlider',
   stemGirth:        'stemGirthSlider',
   taper:            'taperSlider',
   ribbing:          'ribbingSlider',
   segmentation:     'segmentationSlider',
   spininess:        'spininessSlider',
+  woodiness:        'woodinessSlider',
   appendageBreadth: 'appendageBreadthSlider',
   appendageDensity: 'appendageDensitySlider',
+  tipTuft:          'tipTuftSlider',
   verticality:      'verticalitySlider',
   rigidity:         'rigiditySlider',
   branchAngle:      'branchAngleSlider',
@@ -63,8 +68,12 @@ const GENE_SLIDER_ID = {
   leafLobing:       'leafLobingSlider',
   weep:             'weepSlider',
   trunkHeight:      'trunkHeightSlider',
+  trunkTaper:       'trunkTaperSlider',
   barkColor:        'barkColorSlider',
   barkPattern:      'barkPatternSlider',
+  needleLeaf:       'needleLeafSlider',
+  leafScale:        'leafScaleSlider',
+  frondLeaf:        'frondLeafSlider',
   // Roots
   rootCount:        'rootCountSlider',
   rootDepth:        'rootDepthSlider',
@@ -307,21 +316,116 @@ document.getElementById('rerollSeedBtn').addEventListener('click', () => {
 });
 
 // =============================================================================
-// PRESET PICKER WIRING
+// PRESET MODAL WIRING
 // =============================================================================
 
-(function wirePresetPicker() {
-  const sel = document.getElementById('presetSelect');
-  if (!sel) return;
+(function wirePresetModal() {
+  const modal     = document.getElementById('presets-modal');
+  const openBtn   = document.getElementById('presetsBtn');
+  const closeBtn  = document.getElementById('presets-close-btn');
+  const body      = document.getElementById('presets-body');
+  if (!modal || !openBtn || !closeBtn || !body) return;
 
-  sel.addEventListener('change', () => {
-    const preset = PRESETS.find(p => p.id === sel.value);
-    if (!preset) return;
-    // Clone the preset genome so slider edits don't mutate the shared preset object.
-    genome = { ...preset.genome };
-    syncSlidersFromGenome(genome);
-    renderCurrent();
+  // ── Category order ──────────────────────────────────────────────────────────
+  const CATEGORY_ORDER = [
+    'Broadleaf', 'Weeping', 'Columnar', 'Conifer',
+    'Tropical', 'Shrub', 'Succulent', 'Fern', 'Aquatic', 'Other',
+  ];
+
+  // ── Build card DOM ──────────────────────────────────────────────────────────
+  function buildCards() {
+    // Group presets by category; fall back to 'Other' for missing category.
+    const groups = new Map();
+    for (const preset of PRESETS) {
+      const cat = preset.category ?? 'Other';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(preset);
+    }
+
+    // Render groups in the defined order, skipping empty ones.
+    for (const cat of CATEGORY_ORDER) {
+      const presets = groups.get(cat);
+      if (!presets || presets.length === 0) continue;
+
+      const heading = document.createElement('div');
+      heading.className = 'preset-category-heading';
+      heading.textContent = cat;
+      body.appendChild(heading);
+
+      const grid = document.createElement('div');
+      grid.className = 'preset-card-grid';
+
+      for (const preset of presets) {
+        const card = document.createElement('button');
+        card.className = 'preset-card';
+        card.type = 'button';
+        card.dataset.presetId = preset.id;
+
+        // Color swatch from pigment gene.
+        const pigment = preset.genome?.pigment ?? 0.33;
+        const [r, g, b] = pigmentToColor(pigment);
+        const swatch = document.createElement('span');
+        swatch.className = 'preset-swatch';
+        swatch.style.background =
+          `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+        card.appendChild(swatch);
+
+        // Label.
+        const label = document.createElement('span');
+        label.className = 'preset-card-label';
+        label.textContent = preset.label ?? preset.id;
+        card.appendChild(label);
+
+        // Experimental badge.
+        if (preset.experimental === true) {
+          const badge = document.createElement('span');
+          badge.className = 'preset-badge-experimental';
+          badge.textContent = 'exp';
+          card.appendChild(badge);
+        }
+
+        card.addEventListener('click', () => {
+          // Exact same load path as the old dropdown.
+          genome = { ...preset.genome };
+          syncSlidersFromGenome(genome);
+          renderCurrent();
+          closeModal();
+        });
+
+        grid.appendChild(card);
+      }
+
+      body.appendChild(grid);
+    }
+  }
+
+  // ── Open / close ────────────────────────────────────────────────────────────
+  function openModal() {
+    modal.classList.add('open');
+  }
+
+  function closeModal() {
+    modal.classList.remove('open');
+  }
+
+  // Open button.
+  openBtn.addEventListener('click', openModal);
+
+  // X button.
+  closeBtn.addEventListener('click', closeModal);
+
+  // Click on backdrop (outside the panel) closes the modal.
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
   });
+
+  // Escape key closes the modal.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+  });
+
+  // Build cards once on startup.
+  buildCards();
 })();
 
 // =============================================================================

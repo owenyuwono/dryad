@@ -230,7 +230,105 @@ describe('PRESETS — resolve is deterministic', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite 6 — clone-on-load isolation (preset genome is not mutated by caller)
+// Suite 6 — golden-pin regression (skeleton node count, first/last pos, foliage)
+//
+// Guards against silent perturbation of existing tree skeletons when new genes
+// are added or generation code changes. These values were captured against the
+// authoritative run; any change here is a BREAKING regression.
+//
+// Fields pinned: graph.nodes.length, foliage.count,
+//   graph.nodes[0].pos (always [0,0,0] for single-stem trees),
+//   graph.nodes[last].pos (last twig tip — sensitive to bone-budget + rng draws).
+//
+// Do NOT pin volatile fields (e.g. weight, radius, lightDir).
+// ---------------------------------------------------------------------------
+
+const GOLDEN_PINS = [
+  {
+    id:          'tree',
+    nodeCount:   932,
+    foliageCount: 6000,
+    firstPos:    [0, 0, 0],
+    lastPos:     [0.35994885449579733, -0.44102445881784047, -0.9467725210486077],
+  },
+  {
+    id:          'oak',
+    nodeCount:   799,
+    foliageCount: 6000,
+    firstPos:    [0, 0, 0],
+    lastPos:     [0.4334222920319007, -0.21919066082878497, -0.08395010903297559],
+  },
+  {
+    id:          'birch',
+    nodeCount:   138,
+    foliageCount: 1897,
+    firstPos:    [0, 0, 0],
+    lastPos:     [0.406029672161544, -0.22890838100009409, -0.9378941162047706],
+  },
+];
+
+describe('PRESETS — golden-pin structural regression', () => {
+
+  for (const pin of GOLDEN_PINS) {
+    it(`"${pin.id}" skeleton node count is ${pin.nodeCount}`, () => {
+      const preset = PRESETS.find(p => p.id === pin.id);
+      assert.ok(preset, `preset "${pin.id}" not found`);
+      const result = resolve(preset.genome, NEUTRAL_ENV);
+      assert.equal(result.graph.nodes.length, pin.nodeCount,
+        `"${pin.id}" node count changed — skeleton regression`);
+    });
+
+    it(`"${pin.id}" foliage count is ${pin.foliageCount}`, () => {
+      const preset = PRESETS.find(p => p.id === pin.id);
+      const result = resolve(preset.genome, NEUTRAL_ENV);
+      assert.equal(result.foliage.count, pin.foliageCount,
+        `"${pin.id}" foliage count changed — foliage regression`);
+    });
+
+    it(`"${pin.id}" first node position is [0,0,0]`, () => {
+      const preset = PRESETS.find(p => p.id === pin.id);
+      const result = resolve(preset.genome, NEUTRAL_ENV);
+      assert.deepEqual(result.graph.nodes[0].pos, pin.firstPos,
+        `"${pin.id}" first node pos changed`);
+    });
+
+    it(`"${pin.id}" last node position is pinned`, () => {
+      const preset = PRESETS.find(p => p.id === pin.id);
+      const result = resolve(preset.genome, NEUTRAL_ENV);
+      const nodes = result.graph.nodes;
+      assert.deepEqual(nodes[nodes.length - 1].pos, pin.lastPos,
+        `"${pin.id}" last node pos changed — rng draw order or bone-budget regression`);
+    });
+  }
+
+});
+
+// ---------------------------------------------------------------------------
+// Suite 7 — multi-stem check for lilac/bush (stemSpread produces separated bases)
+// ---------------------------------------------------------------------------
+
+describe('PRESETS — multi-stem ground-level base nodes (lilac, bush)', () => {
+
+  for (const id of ['bush', 'lilac']) {
+    it(`"${id}" resolves with more than one separated ground-level base`, () => {
+      const preset = PRESETS.find(p => p.id === id);
+      assert.ok(preset, `preset "${id}" not found`);
+      const result = resolve(preset.genome, NEUTRAL_ENV);
+      // Ground-level bases are non-root nodes with parentIdx === -1.
+      const bases = result.graph.nodes.filter(n => n.parentIdx === -1 && !n.isRoot);
+      assert.ok(bases.length > 1,
+        `"${id}" expected more than one ground base (got ${bases.length}); check tillering+stemSpread`);
+      // Each base must be at a distinct XZ position (not all collapsed to origin).
+      const xzSet = new Set(bases.map(n => `${n.pos[0].toFixed(4)},${n.pos[2].toFixed(4)}`));
+      assert.ok(xzSet.size > 1,
+        `"${id}" all bases share the same XZ — stemSpread not spreading them`);
+    });
+  }
+
+});
+
+// ---------------------------------------------------------------------------
+// Suite 8 — clone-on-load isolation (preset genome is not mutated by caller)
 // ---------------------------------------------------------------------------
 
 describe('PRESETS — preset genomes are safe to clone-on-load', () => {

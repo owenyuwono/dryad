@@ -226,6 +226,22 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
   const { nodes, bones } = graph;
 
   // -------------------------------------------------------------------------
+  // Woodiness gate: herbaceous plants (grass/fern/kelp) have no woody root
+  // system. At woodiness >= 1 the FULL existing code path runs byte-identical.
+  // Below WOODINESS_ROOT_THRESHOLD (0.25) we return immediately with no root
+  // nodes appended — the rootRng sub-stream is isolated from the canopy rng so
+  // skipping draws here never affects canopy or foliage determinism.
+  // -------------------------------------------------------------------------
+  const woodiness = genome.woodiness !== undefined ? genome.woodiness : 1.0;
+
+  /** Threshold below which no root system is grown at all. */
+  const WOODINESS_ROOT_THRESHOLD = 0.25;
+
+  if (woodiness < WOODINESS_ROOT_THRESHOLD) {
+    return graph;
+  }
+
+  // -------------------------------------------------------------------------
   // Root genome genes with safe defaults (genome.js Task 1 adds these;
   // guard with defaults so roots.js works before Task 1 lands).
   // -------------------------------------------------------------------------

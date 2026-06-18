@@ -319,18 +319,26 @@ vCanopyNormal = aCanopyNormal;
 `
     );
 
-    // 3. Fragment declarations — varyings and internal uLightDir uniform
+    // 3. Fragment declarations — varyings and internal uLightDir/uWeep uniforms.
+    //
+    // uWeep (default 0): controls canopy-sphere-normal blend reduction for weeping
+    // willows. At weep=0, canopy blend = 0.8 (identical to the previous behaviour).
+    // At weep=1, canopy blend = 0.0 so the sky-facing geometric normal from foliage.js
+    // Parts A+B drives diffuse — leaves under a hanging canopy catch overhead light.
+    // Set each frame by viewer.js from resolved.genome.weep (see setPlant).
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
       /* glsl */`
 varying float vExposure;
 varying vec3 vInstanceColor;
 uniform vec3 uLightDir;
+uniform float uWeep;
 varying vec3 vCanopyNormal;
 #include <common>
 `
     );
     shader.uniforms.uLightDir = { value: new THREE.Vector3(0.5, 1.0, 0.5).normalize() };
+    shader.uniforms.uWeep     = { value: 0.0 };
 
     // Wind uniforms — added to shader.uniforms so they are uploaded each frame.
     // uBoneTex and uBoneCount are wired by viewer.js (Task 5) after buildBranchGeometry.
@@ -353,7 +361,13 @@ varying vec3 vCanopyNormal;
 
     // 4. Back-face normal flip + canopy sphere normal blend — inject after <normal_fragment_maps>.
     //    Replaces the previous back-face-only flip.  After this chunk `normal` is the
-    //    view-space normal blended 80% canopy sphere / 20% geometric card.
+    //    view-space normal blended by (0.8 * (1-uWeep)) canopy sphere / remainder geometric.
+    //
+    //    At uWeep=0: blend factor = 0.8 — identical to the previous behaviour.
+    //    At uWeep=1: blend factor = 0.0 — pure geometric normal so the sky-facing
+    //    normals written by foliage.js Parts A+B fully drive the diffuse term, letting
+    //    hanging willow leaves catch overhead light instead of shading near-black.
+    //    Intermediate weep values reduce the canopy sphere contribution proportionally.
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <normal_fragment_maps>',
       /* glsl */`
@@ -363,8 +377,12 @@ vec3 geoNormal = gl_FrontFacing ? normal : -normal;
 // Canopy sphere normal — object/world space → view space
 vec3 canopyNV = normalize((viewMatrix * vec4(vCanopyNormal, 0.0)).xyz);
 if (!gl_FrontFacing) canopyNV = -canopyNV;
-// Blend 80% canopy sphere / 20% geometric card — soft volumetric shading
-normal = normalize(mix(geoNormal, canopyNV, 0.8));
+// Blend canopy sphere / geometric card — soft volumetric shading.
+// uWeep reduces the canopy blend so willow leaves use their sky-facing geometric
+// normals (set in foliage.js) rather than a canopy-AABB normal pointing downward.
+// At uWeep=0: factor=0.8 (unchanged). At uWeep=1: factor=0 (pure geo normal).
+float canopyBlend = 0.8 * (1.0 - uWeep);
+normal = normalize(mix(geoNormal, canopyNV, canopyBlend));
 `
     );
 
