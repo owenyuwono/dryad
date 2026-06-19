@@ -5,6 +5,8 @@ import { TREE_DEFAULT, PRESETS }          from './presets.js';
 import { pigmentToColor }                 from './colorRamp.js';
 import { mountInspectorPanels }           from './inspectorPanels.js';
 import { createBarkSwatch }               from './barkSwatch.js';
+import { createForestPreview }            from './forestPreview.js';
+import { createLeafCardPreview }          from './leafCardPreview.js';
 
 // =============================================================================
 // MODULE STATE
@@ -165,6 +167,13 @@ viewer.attachRenderModeController(renderModeCtrl);
 const barkSwatch = createBarkSwatch(document.getElementById('insp-bark'));
 barkSwatch.start();
 
+// 3D preview panels (own WebGL contexts, like barkSwatch). The crossed-card leaf
+// cluster is a dock thumbnail; the forest is a large toggled OVERLAY (own canvas) —
+// not started here, it starts when its overlay is opened (see wireForestToggle).
+const forestPreview = createForestPreview(document.getElementById('forest-canvas'));
+const leafCardPreview = createLeafCardPreview(document.getElementById('insp-leaf-cards'));
+leafCardPreview.start();
+
 const inspector = mountInspectorPanels({
   viewer,
   getGenome:   () => genome,
@@ -189,13 +198,15 @@ const inspector = mountInspectorPanels({
   header.addEventListener('click', () => {
     const collapsed = dock.classList.toggle('collapsed');
     if (collapsed) {
-      // Stop spinning the bark swatch's WebGL context while it's hidden.
+      // Stop spinning the dock WebGL preview contexts while hidden. (The forest is
+      // an overlay, not a dock card — its start/stop is owned by wireForestToggle.)
       barkSwatch.stop();
+      leafCardPreview.stop();
     } else {
       // Re-paint on expand (canvases were sized 0 while hidden) and resume.
       inspector.resize();
-      barkSwatch.resize();
-      barkSwatch.start();
+      barkSwatch.resize();      barkSwatch.start();
+      leafCardPreview.resize(); leafCardPreview.start();
     }
   });
 })();
@@ -209,7 +220,38 @@ function refreshInspector(resolved) {
   lastResolved = resolved;
   inspector.refresh();
   barkSwatch.setGenome(resolved);
+  // Forest re-resolves N varied individuals (needs genome + env); leaf-card puff
+  // just needs the leaf-shape genes. Both debounce / no-op while the dock is collapsed.
+  forestPreview.setGenome(genome, getEnvelope());
+  leafCardPreview.setGenome(genome);
 }
+
+// Wire the forest-view toggle: opens a large overlay with the Poisson-placed stand.
+// The forestPreview only spins/rebuilds while the overlay is open (start/stop here);
+// refreshInspector keeps feeding it the current genome (it rebuilds lazily on open).
+(function wireForestToggle() {
+  const btn      = document.getElementById('forest-toggle-btn');
+  const overlay  = document.getElementById('forest-overlay');
+  const closeBtn = document.getElementById('forest-overlay-close');
+  if (!btn || !overlay) return;
+
+  let open = false;
+  function setOpen(v) {
+    open = v;
+    overlay.classList.toggle('hidden', !open);
+    btn.classList.toggle('active', open);
+    if (open) {
+      // Class removed first → canvas now has layout → resize reads the real size.
+      forestPreview.resize();
+      forestPreview.start();   // start() rebuilds the stand if the genome changed while closed
+    } else {
+      forestPreview.stop();
+    }
+  }
+  btn.addEventListener('click', () => setOpen(!open));
+  if (closeBtn) closeBtn.addEventListener('click', () => setOpen(false));
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) setOpen(false); });
+})();
 
 // Wire reveal-roots toggle button
 (function wireRootsRevealToggle() {
@@ -325,6 +367,8 @@ window.addEventListener('resize', () => {
   viewer.resize();
   inspector.resize();
   barkSwatch.resize();
+  forestPreview.resize();
+  leafCardPreview.resize();
 });
 
 // =============================================================================
@@ -541,7 +585,7 @@ refreshInspector(resolved);
 
 // Inspector canvases size from their laid-out client box; re-paint once after the
 // first layout/paint so they aren't stuck at a zero/stale size on initial load.
-requestAnimationFrame(() => { inspector.resize(); barkSwatch.resize(); });
+requestAnimationFrame(() => { inspector.resize(); barkSwatch.resize(); forestPreview.resize(); leafCardPreview.resize(); });
 
 // =============================================================================
 // STATS PANEL — polls viewer.getStats() ~4×/sec and updates DOM
