@@ -20,6 +20,8 @@ import { makeLeafClusterTexture, leafWidthFactor, leafLengthFactor } from './lea
 import { generateFoliage, expandClumpsToLeaves, expandClumpsToCrossedCards } from './foliage.js';
 import { mulberry32 } from './rng.js';
 import { poissonDisk } from './poisson.js';
+import { createWindSolver } from './windSolver.js';
+import { WIND_TEX_WIDTH } from './windSkinGlsl.js';
 
 const MIN_SPACING   = 0.78;    // min trunk separation — tight enough that canopies overlap
 const TARGET_HEIGHT = 1.5;     // mean tree height (jittered ±22% per tree for a natural stand)
@@ -45,6 +47,20 @@ function buildBranchMesh(g, material) {
   return { mesh, geometry: bg };
 }
 
+// Push per-frame wind uniforms onto one forest-tree material. Guards _windUniforms
+// (set lazily in the material's onBeforeCompile) so a not-yet-compiled material is a
+// no-op until its first render — mirrors viewer.applyWindUniforms. dirX/dirZ are this
+// tree's OBJECT-space wind direction (the world dir rotated by the caller).
+function applyTreeWind(material, t, time, strength, dirX, dirZ) {
+  const wu = material && material._windUniforms;
+  if (!wu) return;
+  if (wu.uTime)         wu.uTime.value         = time;
+  if (wu.uWindStrength) wu.uWindStrength.value = strength;
+  if (wu.uWindDir)      wu.uWindDir.value.set(dirX, dirZ);
+  if (wu.uBoneTex)      wu.uBoneTex.value      = t.boneTex;
+  if (wu.uBoneCount !== undefined) wu.uBoneCount.value = t.boneCount;
+}
+
 /**
  * buildForestGroup({ genome, env, count, leafMode }) -> { group, bounds, dispose }
  */
@@ -52,9 +68,13 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
   const group = new THREE.Group();
   const disposables = [];   // { geometry?, leafCtl?, normalTex? }
 
-  // Shared bark material (one shader compile for the whole stand; same genome).
-  const barkCtl = createBarkMaterial();
-  barkCtl.setGenome({
+  // Per-tree bark material. Each tree has its OWN skeleton → its own wind bone
+  // matrices, so it needs its own uBoneTex uniform; one shared material could only
+  // hold a single tree's bones. The materials share the SAME stable
+  // customProgramCacheKey, so three.js still compiles the bark shader only ONCE for
+  // the whole stand — only the per-material uniforms differ. Genome values are
+  // identical across trees, so build the uniform set once and apply it per tree.
+  const barkGenome = {
     woodiness:     genome.woodiness     ?? 1.0,
     pigment:       genome.pigment,
     barkHue:       genome.barkHue       ?? 0.75,
@@ -66,7 +86,7 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
     barkPlates:    genome.barkPlates    ?? 0.45,
     barkShed:      genome.barkShed      ?? 0.0,
     barkUnderHue:  genome.barkUnderHue  ?? 0.75,
-  });
+  };
 
   // Leaf sprite raster — computed ONCE; each tree wraps the canvases in its own
   // CanvasTexture (a shared one would be freed N times by createLeafMesh.dispose()).
@@ -95,15 +115,35 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
   });
 
   for (let i = 0; i < pts.length; i++) {
-    let geometry = null, leafCtl = null, normalTex = null;
+    let geometry = null, leafCtl = null, normalTex = null, barkCtl = null, boneTex = null;
     try {
       const seed = (baseSeed + (i + 1) * SEED_STRIDE) >>> 0;
       const res = resolve({ ...genome, structuralSeed: seed }, env);
       const g = buildBranchGeometry(res.graph, { maxWindBones: MAX_WIND_BONES });
       if (!g || !g.positions || g.positions.length === 0) continue;
 
+      // Per-tree bark material (own uBoneTex for this tree's wind bones).
+      barkCtl = createBarkMaterial();
+      barkCtl.setGenome(barkGenome);
+
       const branch = buildBranchMesh(g, barkCtl.material);
       geometry = branch.geometry;
+
+      // Per-tree wind: bone DataTexture + solver (each tree's skeleton differs, so the
+      // bone matrices and bone count are unique). Sized to this tree's bone count; the
+      // solver writes straight into the texture's backing array (zero-copy upload).
+      const bones = g.bones_wind;
+      const boneRows = Math.max(1, bones.count);
+      const boneFloats = new Float32Array(WIND_TEX_WIDTH * boneRows * 4);
+      boneTex = new THREE.DataTexture(
+        boneFloats, WIND_TEX_WIDTH, boneRows, THREE.RGBAFormat, THREE.FloatType,
+      );
+      boneTex.magFilter = THREE.NearestFilter;
+      boneTex.minFilter = THREE.NearestFilter;
+      boneTex.generateMipmaps = false;
+      boneTex.flipY = false; // texelFetch(ivec2(col, row)) addresses row 0 at the bottom
+      boneTex.needsUpdate = true;
+      const solver = createWindSolver(bones);
 
       leafCtl = createLeafMesh();
       leafCtl.mesh.castShadow = false;
@@ -156,15 +196,26 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
       const tree = new THREE.Group();
       tree.add(branch.mesh, leafCtl.mesh);
       tree.scale.setScalar(s);
-      tree.rotation.y = jr() * Math.PI * 2;
+      const rotY = jr() * Math.PI * 2;
+      tree.rotation.y = rotY;
       tree.position.set(pts[i].x - plot / 2, 0, pts[i].y - plot / 2);
 
       group.add(tree);
-      disposables.push({ geometry, leafCtl, normalTex });
+      // cos/sin of the tree's facing — used each frame to rotate the WORLD wind
+      // direction into this tree's object space, so every tree bends the same world
+      // direction (a coherent stand) despite its random rotation.y.
+      disposables.push({
+        geometry, leafCtl, normalTex, barkCtl, boneTex, solver,
+        leafMat: leafCtl.mesh.material,
+        boneCount: bones.count,
+        cosY: Math.cos(rotY), sinY: Math.sin(rotY),
+      });
     } catch (err) {
       if (geometry) geometry.dispose();
       if (leafCtl) leafCtl.dispose();
       if (normalTex) normalTex.dispose();
+      if (barkCtl) barkCtl.dispose();
+      if (boneTex) boneTex.dispose();
       if (typeof console !== 'undefined') console.warn('forest tree build failed (skipped):', err);
     }
   }
@@ -178,14 +229,38 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
   return {
     group,
     bounds,
+    /**
+     * updateWind(time, strength, dirX, dirZ) — drive every tree's wind for one frame.
+     * Called from the viewer's render loop (viewer.setForest stores this) with the same
+     * time/strength/direction as the single specimen, so the stand sways with the same
+     * wind. dirX/dirZ is the WORLD wind direction in XZ; per tree it is rotated into
+     * object space so the whole stand bends one coherent world direction. When strength
+     * is 0 the solver is skipped (the shader early-returns at uWindStrength==0 → exact
+     * rest pose), and uWindStrength is still pushed to 0 so toggling wind off settles.
+     */
+    updateWind(time, strength, dirX, dirZ) {
+      for (const t of disposables) {
+        if (!t.solver) continue;
+        // World wind dir → this tree's object space:  Ry(-rotY) · (dirX, dirZ).
+        const ox = t.cosY * dirX - t.sinY * dirZ;
+        const oz = t.sinY * dirX + t.cosY * dirZ;
+        if (strength > 0) {
+          t.solver.solve(t.boneTex.image.data, time, strength, ox, oz);
+          t.boneTex.needsUpdate = true;
+        }
+        applyTreeWind(t.barkCtl.material, t, time, strength, ox, oz);
+        applyTreeWind(t.leafMat,          t, time, strength, ox, oz);
+      }
+    },
     dispose() {
       for (const d of disposables) {
         if (d.geometry) d.geometry.dispose();
         if (d.leafCtl) d.leafCtl.dispose();      // leaf geom + material + COLOUR map + depthMaterial
         if (d.normalTex) d.normalTex.dispose();  // leafCtl.dispose() does NOT free normalMap
+        if (d.barkCtl) d.barkCtl.dispose();      // per-tree bark material
+        if (d.boneTex) d.boneTex.dispose();      // per-tree wind bone DataTexture
       }
       disposables.length = 0;
-      barkCtl.dispose();
     },
   };
 }

@@ -191,7 +191,7 @@ function rebuildForest(reframe) {
   // tracks it. (single-leaf × many trees is heavier; the count slider controls that.)
   const leafMode = (typeof viewer.getLeafMode === 'function') ? viewer.getLeafMode() : 'single';
   forestHandle = buildForestGroup({ genome, env: getEnvelope(), count: forestCount, leafMode });
-  viewer.setForest(forestHandle.group, forestHandle.bounds, reframe);
+  viewer.setForest(forestHandle.group, forestHandle.bounds, reframe, forestHandle.updateWind);
   if (old) old.dispose();
 }
 function scheduleForestRebuild() {

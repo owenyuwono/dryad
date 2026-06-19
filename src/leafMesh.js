@@ -378,7 +378,13 @@ vCanopyNormal = aCanopyNormal;
   float leafLen = length((modelMatrix * instanceMatrix)[1].xyz);
   float bendDroop = position.y * position.y * leafLen * uLeafBend;
   vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
-  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));
+  // followDelta is in the mesh's OBJECT space (the anchor and the bone matrices are
+  // object-space). Rotate/scale it into world space with the model matrix's linear
+  // part so the leaf tracks its branch under a transformed parent (e.g. a scaled +
+  // rotated forest-tree group). modelMatrix = I for the single specimen, so this is
+  // a no-op there. gravityDelta is already world-space (world-down) and is NOT rotated.
+  vec3 worldFollow = mat3(modelMatrix) * followDelta;
+  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(worldFollow + gravityDelta, 0.0));
 #endif
 `
     );
@@ -593,7 +599,13 @@ uniform float uLeafBend;
   float leafLen = length((modelMatrix * instanceMatrix)[1].xyz);
   float bendDroop = position.y * position.y * leafLen * uLeafBend;
   vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
-  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));
+  // followDelta is in the mesh's OBJECT space (the anchor and the bone matrices are
+  // object-space). Rotate/scale it into world space with the model matrix's linear
+  // part so the leaf tracks its branch under a transformed parent (e.g. a scaled +
+  // rotated forest-tree group). modelMatrix = I for the single specimen, so this is
+  // a no-op there. gravityDelta is already world-space (world-down) and is NOT rotated.
+  vec3 worldFollow = mat3(modelMatrix) * followDelta;
+  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(worldFollow + gravityDelta, 0.0));
 #endif
 `
     );

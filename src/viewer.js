@@ -410,6 +410,10 @@ export function createViewer(canvas) {
   // Forest mode: a Group of N stand trees added to the scene (built by forest.js).
   // When set, the single specimen meshes are hidden and the camera frames the stand.
   let _forestGroup = null;
+  // Per-frame wind driver for the active forest stand (forestHandle.updateWind),
+  // stored by setForest and cleared by clearForest. null when no forest is shown.
+  // Called from frame() with the same time/strength/direction as the single specimen.
+  let _forestWindUpdate = null;
   // Intended specimen part-visibility (the inspector isolate-part toggles set these).
   // setForest force-hides the meshes WITHOUT touching this intent, so clearForest can
   // restore exactly what the user had toggled, not a blind `true`.
@@ -734,6 +738,12 @@ export function createViewer(canvas) {
     const leafDepthMat = leaves.mesh.customDepthMaterial;
     if (leafDepthMat) {
       applyWindUniforms(leafDepthMat, activeStrength);
+    }
+
+    // Forest stand wind — drive every tree in the active stand with the same
+    // time/strength/direction as the single specimen so the whole stand sways.
+    if (_forestWindUpdate !== null) {
+      _forestWindUpdate(windTime, activeStrength, WIND_DIR_DEFAULT.x, WIND_DIR_DEFAULT.y);
     }
 
     if (walkMode) {
@@ -1402,15 +1412,20 @@ export function createViewer(canvas) {
      * SCENE: hides the single specimen (branch + leaves), adds the group, and frames
      * the camera to the stand bounds. Replaces any previously-set forest group in the
      * scene (the caller owns disposal of the old group). The group carries its own
-     * materials and is static (no wind / no render-mode swap).
+     * materials; its wind is driven per-frame via the windUpdate callback (no
+     * render-mode swap).
      *
      * reframe: re-aim the camera at the stand bounds. Pass true when ENTERING forest
      * mode or changing the count (bounds changed); pass false for a genome-driven
      * rebuild at the same count (bounds are identical) so the user's orbit/pan survives.
+     *
+     * windUpdate: optional per-frame wind driver (forestHandle.updateWind). Called from
+     * the render loop with (time, strength, dirX, dirZ). Pass null for a static stand.
      */
-    setForest(group, bounds, reframe = true) {
+    setForest(group, bounds, reframe = true, windUpdate = null) {
       if (_forestGroup && _forestGroup !== group) scene.remove(_forestGroup);
       _forestGroup = group;
+      _forestWindUpdate = windUpdate;   // per-frame wind driver for this stand (null = none)
       if (group) scene.add(group);
       branchMesh.visible = false;   // hide specimen WITHOUT changing the user's toggle intent
       leaves.mesh.visible = false;
@@ -1429,6 +1444,7 @@ export function createViewer(canvas) {
      */
     clearForest() {
       if (_forestGroup) { scene.remove(_forestGroup); _forestGroup = null; }
+      _forestWindUpdate = null;
       // Restore the parts the user actually wants visible (not a blind true), so the
       // isolate-part toggles stay in sync after leaving forest mode.
       branchMesh.visible = _structureVisible;
