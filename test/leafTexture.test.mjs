@@ -12,6 +12,8 @@ import {
   growVenation,
   pinnateVenation,
   frondLeafletParams,
+  leafWidthFactor,
+  leafLengthFactor,
 } from '../src/leafTexture.js';
 
 test('leafHalfWidth is 0 at base (t=0) for all breadths', () => {
@@ -797,4 +799,55 @@ test('leafDivision blend determinism: same args produce same alpha stamps', asyn
   const run2 = await runWithMock(args);
   assert.deepStrictEqual(run1, run2,
     'leafDivision blend alpha stamps must be identical for identical inputs (determinism)');
+});
+
+// ---------------------------------------------------------------------------
+// Card-aspect factors — leafWidth → card X, leafLength → card Y, DECOUPLED.
+//
+// These are the single-leaf RENDER path's width:length mapping (applied by
+// leafMesh.setLeafAspect). The independence the genes lost (both collapsing onto
+// the same axis because the sprite was self-normalized) is restored here: width
+// drives ONLY the X factor and length ONLY the Y factor.
+// ---------------------------------------------------------------------------
+
+test('leafWidthFactor: ≈1.0 at the default leafWidth (0.5), monotonically increasing', () => {
+  assert.ok(Math.abs(leafWidthFactor(0.5) - 1.0) < 1e-9, `default should be ~1.0, got ${leafWidthFactor(0.5)}`);
+  const levels = [0.0, 0.25, 0.5, 0.75, 1.0];
+  for (let i = 1; i < levels.length; i++) {
+    assert.ok(leafWidthFactor(levels[i]) > leafWidthFactor(levels[i - 1]),
+      `leafWidthFactor should increase with leafWidth at ${levels[i]}`);
+  }
+});
+
+test('leafLengthFactor: ≈1.0 at the default leafLength (0.45), monotonically increasing', () => {
+  assert.ok(Math.abs(leafLengthFactor(0.45) - 1.0) < 1e-9, `default should be ~1.0, got ${leafLengthFactor(0.45)}`);
+  const levels = [0.0, 0.25, 0.45, 0.7, 1.0];
+  for (let i = 1; i < levels.length; i++) {
+    assert.ok(leafLengthFactor(levels[i]) > leafLengthFactor(levels[i - 1]),
+      `leafLengthFactor should increase with leafLength at ${levels[i]}`);
+  }
+});
+
+test('card aspect decouples width and length (each gene drives only its own axis)', () => {
+  // leafLength changes the Y (length) factor but NOT the X (width) factor:
+  const wAtShort = leafWidthFactor(0.5);
+  const wAtLong  = leafWidthFactor(0.5);          // width gene fixed
+  assert.strictEqual(wAtShort, wAtLong, 'width factor must be independent of length');
+  assert.ok(leafLengthFactor(0.9) > leafLengthFactor(0.1), 'length gene drives the Y factor');
+
+  // leafWidth changes the X (width) factor but NOT the Y (length) factor:
+  const lAtNarrow = leafLengthFactor(0.45);
+  const lAtWide   = leafLengthFactor(0.45);       // length gene fixed
+  assert.strictEqual(lAtNarrow, lAtWide, 'length factor must be independent of width');
+  assert.ok(leafWidthFactor(0.9) > leafWidthFactor(0.1), 'width gene drives the X factor');
+
+  // Both factors are strictly positive (no zero-area cards).
+  for (const v of [0, 0.5, 1]) {
+    assert.ok(leafWidthFactor(v) > 0 && leafLengthFactor(v) > 0);
+  }
+});
+
+test('card aspect factors are pure/deterministic', () => {
+  assert.strictEqual(leafWidthFactor(0.3), leafWidthFactor(0.3));
+  assert.strictEqual(leafLengthFactor(0.7), leafLengthFactor(0.7));
 });

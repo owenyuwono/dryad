@@ -457,6 +457,32 @@ export function leafBaseParams(genes) {
   return { m, n1, n2, n3, a, b, axialStretch, xScale, serration, serrationFreq, skewGamma };
 }
 
+// ---------------------------------------------------------------------------
+// Card-aspect factors — the single-leaf RENDER path carries width:length on the
+// leaf CARD's aspect (leafMesh.setLeafAspect), not the sprite, so leafWidth and
+// leafLength scale independent axes. These pure functions are the single source
+// for that mapping (used by viewer.js + forest.js; Node-testable).
+//
+//   leafWidthFactor:  card X-scale (breadth). Reuses the OLD sprite xScale curve
+//     (0.4 + leafWidth·1.2) so the default genome (leafWidth 0.5 → 1.0) renders at
+//     the same width as before — width simply moved from the sprite to the card.
+//   leafLengthFactor: card Y-scale (length). Identity (≈1.0) at the default
+//     leafLength 0.45, growing with the gene. Previously leafLength only narrowed
+//     the leaf (it could not change rendered length because the sprite is
+//     self-normalized to fill the card height); now it stretches the card's Y.
+//
+// Both are clamped > 0 (setLeafAspect also guards) so a degenerate factor can't
+// collapse a card to zero area.
+// ---------------------------------------------------------------------------
+
+export function leafWidthFactor(leafWidth = 0.5) {
+  return 0.4 + leafWidth * 1.2;   // [0.4, 1.6]; 1.0 at the default 0.5
+}
+
+export function leafLengthFactor(leafLength = 0.45) {
+  return 0.55 + leafLength * 1.0; // [0.55, 1.55]; ≈1.0 at the default 0.45
+}
+
 function leafVariantParams(baseParams, rng) {
   return {
     m:             baseParams.m,
@@ -798,10 +824,15 @@ export function makeLeafClusterTexture({
   function _drawBroadleafOn(target) {
     const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing, leafSkew });
 
-    // ----- CLUSTER mode (the previous implementation): a sprig of several -----
-    // leaves painted into ONE sprite. Far fewer instances/triangles because each
-    // foliage anchor stays a single card (expandClumpsToLeaves passes through).
-    if (leafMode === 'cluster') {
+    // ----- CLUSTER / CROSSED mode: a sprig of several leaves painted into ONE -----
+    // sprite. Far fewer instances/triangles because each foliage anchor stays a
+    // single card (expandClumpsToLeaves passes through). 'crossed' uses the SAME
+    // multi-leaf sprite as 'cluster' — it just renders K=3 criss-crossed copies of
+    // that card per anchor (SpeedTree-style), decided in foliage.js / the viewer.
+    // Width here still comes from the sprite (xScale); card-aspect width is only
+    // applied in 'single' mode (one leaf per card), so cluster/crossed sprigs are
+    // not stretched.
+    if (leafMode === 'cluster' || leafMode === 'crossed') {
       const count  = clusterLeafCount(seed);
       const leaves = clusterLeafParams(seed, count);
       const attachX = SIZE / 2;
@@ -832,7 +863,16 @@ export function makeLeafClusterTexture({
     // ----- SINGLE-LEAF mode (default): ONE leaf per card, the shape-IS-the- -----
     // texture model. Canopy density comes from many single-leaf cards (foliage
     // clumps fanned out by expandClumpsToLeaves).
-    const outline = superformulaOutline(baseParams, 160);
+    //
+    // CARD-ASPECT WIDTH: width:length is now carried by the leaf CARD's aspect
+    // ratio (leafMesh.setLeafAspect — leafWidth → card X, leafLength → card Y), so
+    // the two genes scale independent axes. To avoid applying width TWICE, the
+    // single-leaf sprite is drawn at UNIT xScale (the leaf fills the square sprite
+    // shape-only); the card then stretches it. axialStretch is left in the sprite —
+    // it only changes the leaf SILHOUETTE (pointier/blunter), not its rendered
+    // length, because the outline is self-normalized to fill the card height.
+    const singleParams = { ...baseParams, xScale: 1 };
+    const outline = superformulaOutline(singleParams, 160);
 
     // Fit the single leaf to fill the card: base at bottom-centre, tip up. leafH
     // is bounded by BOTH the card height and width so a broad leaf doesn't clip.

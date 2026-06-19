@@ -16,8 +16,8 @@ import { resolve } from './genome.js';
 import { buildBranchGeometry, MAX_WIND_BONES } from './branchMesh.js';
 import { createBarkMaterial } from './barkMaterial.js';
 import { createLeafMesh } from './leafMesh.js';
-import { makeLeafClusterTexture } from './leafTexture.js';
-import { generateFoliage, expandClumpsToLeaves } from './foliage.js';
+import { makeLeafClusterTexture, leafWidthFactor, leafLengthFactor } from './leafTexture.js';
+import { generateFoliage, expandClumpsToLeaves, expandClumpsToCrossedCards } from './foliage.js';
 import { mulberry32 } from './rng.js';
 import { poissonDisk } from './poisson.js';
 
@@ -122,12 +122,25 @@ export function buildForestGroup({ genome, env, count = 6, leafMode = 'cluster' 
       const foliage = (res.genome && g.nodeToBone)
         ? generateFoliage(res.graph, res.genome, { nodeToBone: g.nodeToBone })
         : res.foliage;
+      // Card aspect — mirror the hero viewer: single mode carries width:length on
+      // the card (leafWidth → X, leafLength → Y); cluster/crossed keep the square
+      // multi-leaf sprig sprite (1,1) so it isn't stretched.
+      if (typeof leafCtl.setLeafAspect === 'function') {
+        if (leafMode === 'single') {
+          leafCtl.setLeafAspect(leafWidthFactor(res.leafWidth ?? 0.5), leafLengthFactor(res.leafLength ?? 0.45));
+        } else {
+          leafCtl.setLeafAspect(1, 1);
+        }
+      }
       // Mirror the hero viewer: SINGLE mode fans each broadleaf clump anchor into
-      // individual single-leaf cards (1 card = 1 leaf); CLUSTER keeps one multi-leaf
-      // sprite per anchor. (The sprite itself already matches via leafMode above.)
+      // individual single-leaf cards (1 card = 1 leaf); CROSSED emits K=3 criss-
+      // crossed copies of the multi-leaf sprite per anchor; CLUSTER keeps one
+      // multi-leaf sprite per anchor. (The sprite itself already matches via leafMode.)
       const leafSet = (leafMode === 'single' && foliage)
         ? expandClumpsToLeaves(foliage, res.genome)
-        : foliage;
+        : (leafMode === 'crossed' && foliage)
+          ? expandClumpsToCrossedCards(foliage, res.genome)
+          : foliage;
       if (leafSet) leafCtl.update(leafSet);
 
       // Place at the Poisson point (plot centred on origin). y=0: the graph origin is

@@ -43,13 +43,13 @@ import { OutputPass }     from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { buildBranchGeometry, MAX_WIND_BONES } from './branchMesh.js';
 import { createBarkMaterial, createBranchDepthMaterial } from './barkMaterial.js';
 import { createLeafMesh }      from './leafMesh.js';
-import { makeLeafClusterTexture } from './leafTexture.js';
+import { makeLeafClusterTexture, leafWidthFactor, leafLengthFactor } from './leafTexture.js';
 import { loadEnvironment }     from './environment.js';
 import { createGround }        from './ground.js';
 import { WIND_UNIFORM_DEFAULTS } from './windGlsl.js';
 import { WIND_TEX_WIDTH }      from './windSkinGlsl.js';
 import { createWindSolver }    from './windSolver.js';
-import { generateFoliage, expandClumpsToLeaves } from './foliage.js';
+import { generateFoliage, expandClumpsToLeaves, expandClumpsToCrossedCards } from './foliage.js';
 
 // =============================================================================
 // CONSTANTS
@@ -85,6 +85,18 @@ const MAX_RADIUS   = 80.0;
 const MAX_ELEVATION = (85 * Math.PI) / 180; // ±85°
 
 const AUTO_SPIN_SPEED = 0.15; // radians per second
+
+// First-person walk mode.
+// Eye height and move speed are derived from the scene scale (orbit radius)
+// each time enterWalk() runs, so it feels right for both the single specimen
+// (~a few units tall) and a forest (trees ~1.5 units tall) — see enterWalk().
+const WALK_PITCH_LIMIT  = 1.45;   // clamp look up/down to ±~83°
+const WALK_LOOK_SENS    = 0.0025; // radians per pixel of mouse movement
+const WALK_EYE_FRAC     = 0.06;   // eye height as a fraction of orbit radius
+const WALK_SPEED_FRAC   = 0.55;   // walk speed (units/s) as a fraction of orbit radius
+const WALK_EYE_MIN      = 0.3;    // floor so tiny scenes still have a sensible eye height
+const WALK_SPEED_MIN    = 1.0;    // floor so walking never feels glacial
+const WALK_RUN_MULT     = 2.0;    // shift-to-run multiplier
 
 // Wind — default direction: normalize(1, 0.2), clamped strength range
 const WIND_DIR_DEFAULT  = new THREE.Vector2(1, 0.2).normalize();
@@ -379,6 +391,22 @@ export function createViewer(canvas) {
   // Only auto-frame on the very first setPlant call.
   let firstPlant = true;
 
+  // ---------------------------------------------------------------------------
+  // First-person walk-mode state
+  //
+  // When walkMode is true the frame loop drives perspCam from walkPos + yaw/pitch
+  // instead of the orbit state. The orbit state (azimuth/elevation/radius/target)
+  // is left untouched so exitWalk() resumes the prior orbit view exactly.
+  // ---------------------------------------------------------------------------
+  let walkMode    = false;
+  const walkPos   = new THREE.Vector3();
+  let walkYaw     = 0;       // heading: 0 looks toward +Z, increases CCW
+  let walkPitch   = 0;       // look up/down, clamped to ±WALK_PITCH_LIMIT
+  let walkEyeY    = 1.6;     // fixed eye height (world units), set in enterWalk
+  let walkSpeed   = 3.0;     // move speed (units/s), set in enterWalk
+  const walkKeys  = new Set();
+  const _walkLookScratch = new THREE.Vector3();
+
   // Forest mode: a Group of N stand trees added to the scene (built by forest.js).
   // When set, the single specimen meshes are hidden and the camera frames the stand.
   let _forestGroup = null;
@@ -460,6 +488,7 @@ export function createViewer(canvas) {
   let pointerId   = null;
 
   function onPointerDown(e) {
+    if (walkMode) return; // dragging must not orbit while walking
     isPan = e.shiftKey || e.button === 2;
     pointerDown = true;
     lastX = e.clientX;
@@ -470,6 +499,7 @@ export function createViewer(canvas) {
   }
 
   function onPointerMove(e) {
+    if (walkMode) return; // mouse-look is handled by the pointer-lock listener
     if (!pointerDown || e.pointerId !== pointerId) return;
 
     const dx = e.clientX - lastX;
@@ -502,6 +532,7 @@ export function createViewer(canvas) {
   }
 
   function onWheel(e) {
+    if (walkMode) return; // no dolly while walking
     e.preventDefault();
     stopAutoSpin();
     const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
@@ -511,6 +542,115 @@ export function createViewer(canvas) {
   function onContextMenu(e) {
     e.preventDefault();
   }
+
+  // ---------------------------------------------------------------------------
+  // First-person walk-mode handlers (document-level; added in enterWalk,
+  // removed in exitWalk + dispose).
+  // ---------------------------------------------------------------------------
+
+  // Forward direction from yaw/pitch. yaw=0,pitch=0 → looks toward +Z.
+  function walkLookDir(yaw, pitch, out) {
+    const cosP = Math.cos(pitch);
+    out.set(Math.sin(yaw) * cosP, Math.sin(pitch), Math.cos(yaw) * cosP);
+    return out;
+  }
+
+  function onWalkKeyDown(e) {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // Esc always exits, even if pointer lock was never acquired (otherwise a denied
+    // lock would soft-lock walk mode with no way back — the only other exit is the
+    // pointerlockchange handler, which never fires without a lock).
+    if (k === 'Escape') { exitWalk(); return; }
+    walkKeys.add(k);
+    // Prevent WASD/space from scrolling the page while walking.
+    if (['w', 'a', 's', 'd', ' ', 'Shift'].includes(k) || k === 'ArrowUp' ||
+        k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') {
+      e.preventDefault();
+    }
+  }
+
+  function onWalkKeyUp(e) {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    walkKeys.delete(k);
+  }
+
+  function onWalkMouseMove(e) {
+    if (document.pointerLockElement !== canvas) return;
+    walkYaw   -= e.movementX * WALK_LOOK_SENS;
+    walkPitch -= e.movementY * WALK_LOOK_SENS;
+    walkPitch  = Math.max(-WALK_PITCH_LIMIT, Math.min(WALK_PITCH_LIMIT, walkPitch));
+  }
+
+  function onPointerLockChange() {
+    // Lock lost (Esc, alt-tab, etc.) while in walk mode → leave walk mode.
+    if (walkMode && document.pointerLockElement !== canvas) {
+      exitWalk();
+    }
+  }
+
+  function enterWalk() {
+    if (walkMode) return;
+    walkMode = true;
+    stopAutoSpin();
+
+    // Release any in-progress orbit drag so it doesn't fight the walk camera.
+    if (pointerId != null && canvas.releasePointerCapture) {
+      try { canvas.releasePointerCapture(pointerId); } catch (_) { /* ignore */ }
+    }
+    pointerDown = false;
+    pointerId = null;
+
+    // Derive eye height + speed from the current scene scale (orbit radius).
+    walkEyeY  = Math.max(WALK_EYE_MIN,   radius * WALK_EYE_FRAC);
+    walkSpeed = Math.max(WALK_SPEED_MIN, radius * WALK_SPEED_FRAC);
+
+    // Start position: the current orbit camera position, projected onto the
+    // walking plane at the fixed eye height. Start heading: face the orbit
+    // target (so entering walk keeps roughly the same view), pitch level.
+    const camPos = orbitCamPos(azimuth, elevation, radius, target);
+    walkPos.set(camPos.x, walkEyeY, camPos.z);
+    const dx = target.x - walkPos.x;
+    const dz = target.z - walkPos.z;
+    walkYaw   = Math.atan2(dx, dz); // atan2(x,z) so yaw matches walkLookDir
+    walkPitch = 0;
+    walkKeys.clear();
+
+    document.addEventListener('keydown',          onWalkKeyDown);
+    document.addEventListener('keyup',            onWalkKeyUp);
+    document.addEventListener('mousemove',        onWalkMouseMove);
+    document.addEventListener('pointerlockchange', onPointerLockChange);
+
+    // Request pointer lock. If it's unsupported or the browser rejects it (modern
+    // API returns a Promise), don't strand the user in walk mode — Esc still exits
+    // (onWalkKeyDown), and a rejected lock falls back to exitWalk so orbit resumes.
+    if (canvas.requestPointerLock) {
+      const req = canvas.requestPointerLock();
+      if (req && typeof req.catch === 'function') req.catch(() => exitWalk());
+    }
+  }
+
+  function exitWalk() {
+    if (!walkMode) return;
+    walkMode = false;
+    walkKeys.clear();
+
+    document.removeEventListener('keydown',          onWalkKeyDown);
+    document.removeEventListener('keyup',            onWalkKeyUp);
+    document.removeEventListener('mousemove',        onWalkMouseMove);
+    document.removeEventListener('pointerlockchange', onPointerLockChange);
+
+    if (document.pointerLockElement === canvas && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+
+    // The orbit state (azimuth/elevation/radius/target) was never touched, so
+    // the next frame resumes the prior orbit view. Notify any UI controller so
+    // it can clear its "walking" affordance (e.g. an .active button class).
+    if (typeof _onWalkExit === 'function') _onWalkExit();
+  }
+
+  // Optional UI callback fired when walk mode ends (e.g. on Esc).
+  let _onWalkExit = null;
 
   canvas.addEventListener('pointerdown',   onPointerDown);
   canvas.addEventListener('pointermove',   onPointerMove);
@@ -596,15 +736,45 @@ export function createViewer(canvas) {
       applyWindUniforms(leafDepthMat, activeStrength);
     }
 
-    if (autoSpin) {
-      azimuth += AUTO_SPIN_SPEED * dt;
-    }
+    if (walkMode) {
+      // First-person: advance walkPos by WASD along the horizontal heading,
+      // keep a fixed eye height, then aim the camera along yaw/pitch.
+      const sinY = Math.sin(walkYaw);
+      const cosY = Math.cos(walkYaw);
+      // Horizontal forward (ignores pitch) and screen-right vectors.
+      // forward = (sinY, 0, cosY);  screen-right = cross(forward, up) = (-cosY, 0, sinY).
+      let mx = 0; // strafe (+ = screen-right, the D key)
+      let mz = 0; // forward
+      if (walkKeys.has('w') || walkKeys.has('ArrowUp'))    mz += 1;
+      if (walkKeys.has('s') || walkKeys.has('ArrowDown'))  mz -= 1;
+      if (walkKeys.has('d') || walkKeys.has('ArrowRight')) mx += 1;
+      if (walkKeys.has('a') || walkKeys.has('ArrowLeft'))  mx -= 1;
+      if (mx !== 0 || mz !== 0) {
+        // Normalize so diagonal isn't faster.
+        const inv = 1 / Math.hypot(mx, mz);
+        mx *= inv; mz *= inv;
+        const speed = walkSpeed * (walkKeys.has('Shift') ? WALK_RUN_MULT : 1) * dt;
+        walkPos.x += (mz * sinY - mx * cosY) * speed;   // +mz forward, +mx screen-right
+        walkPos.z += (mz * cosY + mx * sinY) * speed;
+      }
+      walkPos.y = walkEyeY;
 
-    const camPos = orbitCamPos(azimuth, elevation, radius, target);
-    perspCam.position.copy(camPos);
-    perspCam.up.set(0, 1, 0);
-    perspCam.lookAt(target);
-    perspCam.updateMatrixWorld();
+      const look = walkLookDir(walkYaw, walkPitch, _walkLookScratch);
+      perspCam.position.copy(walkPos);
+      perspCam.up.set(0, 1, 0);
+      perspCam.lookAt(walkPos.x + look.x, walkPos.y + look.y, walkPos.z + look.z);
+      perspCam.updateMatrixWorld();
+    } else {
+      if (autoSpin) {
+        azimuth += AUTO_SPIN_SPEED * dt;
+      }
+
+      const camPos = orbitCamPos(azimuth, elevation, radius, target);
+      perspCam.position.copy(camPos);
+      perspCam.up.set(0, 1, 0);
+      perspCam.lookAt(target);
+      perspCam.updateMatrixWorld();
+    }
 
     // Reset render counters once per frame (autoReset is off) so getStats sees
     // the accumulated totals across all of composer's passes, not just the last.
@@ -850,13 +1020,30 @@ export function createViewer(canvas) {
           });
         }
 
+        // CARD ASPECT (single-leaf mode only): leafWidth → card X-scale,
+        // leafLength → card Y-scale, so the two genes stretch independent axes of
+        // each leaf card (the sprite is drawn unit-width; width comes from the
+        // card). Cluster/crossed modes use the multi-leaf sprig sprite, which must
+        // NOT be stretched, so the aspect resets to (1,1) for them.
+        if (_leafMode === 'single') {
+          const wf = leafWidthFactor(resolved.leafWidth  ?? 0.5);
+          const lf = leafLengthFactor(resolved.leafLength ?? 0.45);
+          if (typeof leaves.setLeafAspect === 'function') leaves.setLeafAspect(wf, lf);
+        } else if (typeof leaves.setLeafAspect === 'function') {
+          leaves.setLeafAspect(1, 1);
+        }
+
         // SINGLE-LEAF mode: fan each broadleaf CLUMP anchor into individual
         // single-leaf cards (render-only — generation/SoA above are untouched;
-        // frond/needle/spiny canopies pass through unchanged). CLUSTER mode keeps
-        // one multi-leaf card per anchor (no expansion) — far fewer instances.
+        // frond/needle/spiny canopies pass through unchanged). CROSSED mode emits
+        // K=3 criss-crossed copies of the multi-leaf cluster card per anchor
+        // (SpeedTree-style). CLUSTER mode keeps one multi-leaf card per anchor (no
+        // expansion) — far fewer instances.
         const leafSet = _leafMode === 'single'
           ? expandClumpsToLeaves(foliageForUpdate, resolved.genome)
-          : foliageForUpdate;
+          : _leafMode === 'crossed'
+            ? expandClumpsToCrossedCards(foliageForUpdate, resolved.genome)
+            : foliageForUpdate;
         leaves.update(leafSet);
         leaves.mesh.castShadow = true;
         leaves.mesh.receiveShadow = true;
@@ -973,6 +1160,16 @@ export function createViewer(canvas) {
       canvas.removeEventListener('wheel',         onWheel);
       canvas.removeEventListener('contextmenu',   onContextMenu);
 
+      // Walk-mode document listeners (added only while walking, but remove
+      // defensively in case dispose() lands mid-walk).
+      document.removeEventListener('keydown',           onWalkKeyDown);
+      document.removeEventListener('keyup',             onWalkKeyUp);
+      document.removeEventListener('mousemove',         onWalkMouseMove);
+      document.removeEventListener('pointerlockchange', onPointerLockChange);
+      if (document.pointerLockElement === canvas && document.exitPointerLock) {
+        document.exitPointerLock();
+      }
+
       if (currentLeafTex !== null) {
         currentLeafTex.dispose();
         currentLeafTex = null;
@@ -1014,6 +1211,45 @@ export function createViewer(canvas) {
       if (_renderModeController) _renderModeController.setMode(mode);
       // else: no-op until controller attached
     },
+
+    /**
+     * enterWalk()
+     *
+     * Enter first-person walk mode: WASD to move, mouse to look (via Pointer
+     * Lock), fixed eye height on the ground plane. Press Esc to exit (the
+     * browser releases pointer lock → pointerlockchange → exitWalk). Eye height
+     * and move speed are derived from the current scene scale. The orbit camera
+     * state is preserved, so exiting resumes the prior orbit view.
+     */
+    enterWalk() {
+      enterWalk();
+    },
+
+    /**
+     * exitWalk()
+     *
+     * Programmatically leave walk mode (also invoked automatically when pointer
+     * lock is released, e.g. on Esc).
+     */
+    exitWalk() {
+      exitWalk();
+    },
+
+    /**
+     * isWalking()
+     * @returns {boolean} whether walk mode is currently active.
+     */
+    isWalking() { return walkMode; },
+
+    /**
+     * onWalkExit(cb)
+     *
+     * Register a callback fired whenever walk mode ends (so the UI can clear its
+     * "walking" affordance, e.g. an .active button class, after an Esc exit).
+     *
+     * @param {(() => void) | null} cb
+     */
+    onWalkExit(cb) { _onWalkExit = cb; },
 
     attachRenderModeController(ctrl) {
       _renderModeController = ctrl;
@@ -1079,14 +1315,16 @@ export function createViewer(canvas) {
      * setLeafMode(mode)
      *
      * 'single' = one leaf per card (clumps fanned out); 'cluster' = a multi-leaf
-     * sprig per card (cheaper). Stores the mode; the caller must re-render
+     * sprig per card (cheaper); 'crossed' = K=3 criss-crossed copies of the
+     * multi-leaf sprig per anchor (SpeedTree-style volumetric puff). Unknown
+     * values normalize to 'single'. Stores the mode; the caller must re-render
      * (setPlant) for it to take effect — both the leaf sprite and whether clump
      * anchors are expanded are decided in setPlant from this flag.
      *
-     * @param {'single'|'cluster'} mode
+     * @param {'single'|'cluster'|'crossed'} mode
      */
     setLeafMode(mode) {
-      _leafMode = (mode === 'cluster') ? 'cluster' : 'single';
+      _leafMode = (mode === 'cluster' || mode === 'crossed') ? mode : 'single';
     },
 
     getLeafMode() { return _leafMode; },

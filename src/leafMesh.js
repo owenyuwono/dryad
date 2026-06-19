@@ -109,7 +109,7 @@ const _col = new THREE.Color();
  * @param {number}       i          instance index
  * @param {THREE.Matrix4} out       matrix to write into
  */
-function buildInstanceMatrix(position, normal, tangent, scale, rotation, i, out) {
+function buildInstanceMatrix(position, normal, tangent, scale, rotation, i, out, widthFactor, lengthFactor) {
   const p3 = i * 3;
 
   // Normalise tangent (blade up) and normal (face)
@@ -143,9 +143,17 @@ function buildInstanceMatrix(position, normal, tangent, scale, rotation, i, out)
     _mat.premultiply(_rot);
   }
 
-  // Scale uniformly
+  // Scale: uniform per-instance size `s`, modulated by the CARD ASPECT
+  // (widthFactor on the blade-right axis = X, lengthFactor on the tangent/up axis
+  // = Y). leafWidth drives widthFactor, leafLength drives lengthFactor, so the two
+  // genes stretch independent axes of the card — the leaf reads wider OR longer
+  // rather than both collapsing onto one axis. The face-normal axis (Z) uses the
+  // width factor so the card stays planar (no shear). Defaults (1,1) = uniform.
+  // NOTE: this scaling lives in instanceMatrix column 1 (the up axis), so the
+  // gravity-bend's leafLen = length(instanceMatrix[1].xyz) = s*lengthFactor —
+  // the droop stays proportional to the RENDERED leaf length.
   const s = scale[i];
-  _mat.scale(new THREE.Vector3(s, s, s));
+  _mat.scale(new THREE.Vector3(s * widthFactor, s * lengthFactor, s * widthFactor));
 
   // Translation
   _mat.setPosition(position[p3], position[p3 + 1], position[p3 + 2]);
@@ -192,6 +200,16 @@ export function createLeafMesh() {
   // Gravity-bend strength (tip droop as a fraction of leaf length). Mutable via
   // setLeafBend(); the uniform refs are captured in onBeforeCompile below.
   let _leafBend = LEAF_BEND_DEFAULT;
+
+  // CARD ASPECT — per-tree, uniform across all instances (the genome's leafWidth/
+  // leafLength are a single value per plant). widthFactor scales the card's X
+  // (breadth), lengthFactor scales its Y (length). Set via setLeafAspect(); applied
+  // in buildInstanceMatrix. Defaults to (1,1) = square card (today's look for the
+  // default genome, where the chosen factor curves both evaluate to ~1.0). Used
+  // only in 'single' leaf mode; cluster/crossed modes reset to (1,1) so the
+  // multi-leaf sprig sprite isn't stretched.
+  let _widthFactor  = 1.0;
+  let _lengthFactor = 1.0;
 
   // ---------------------------------------------------------------------------
   // Material — MeshStandardMaterial with onBeforeCompile.
@@ -748,7 +766,7 @@ uniform float uLeafBend;
 
       for (let i = 0; i < count; i++) {
         // --- matrix ---
-        buildInstanceMatrix(position, normal, tangent, scale, rotation, i, _m4);
+        buildInstanceMatrix(position, normal, tangent, scale, rotation, i, _m4, _widthFactor, _lengthFactor);
         mesh.setMatrixAt(i, _m4);
 
         // --- per-instance tint (age-based colour + wide deterministic jitter) ---
@@ -870,6 +888,24 @@ uniform float uLeafBend;
       _leafBend = amount;
       if (material._leafBendUniform)       material._leafBendUniform.value = amount;
       if (depthMaterial._leafBendUniform)  depthMaterial._leafBendUniform.value = amount;
+    },
+
+    /**
+     * setLeafAspect(widthFactor, lengthFactor)
+     *
+     * Set the per-tree card aspect ratio applied to every leaf instance:
+     * widthFactor scales the card's breadth (X / blade-right axis), lengthFactor
+     * scales its length (Y / tangent axis). leafWidth → widthFactor and
+     * leafLength → lengthFactor (computed by the caller), so the two genes scale
+     * independent axes instead of collapsing onto one. Takes effect on the NEXT
+     * update() (the matrices are rebuilt there). (1,1) = square card.
+     *
+     * @param {number} widthFactor
+     * @param {number} lengthFactor
+     */
+    setLeafAspect(widthFactor, lengthFactor) {
+      _widthFactor  = (widthFactor  > 0) ? widthFactor  : 1.0;
+      _lengthFactor = (lengthFactor > 0) ? lengthFactor : 1.0;
     },
 
     /**

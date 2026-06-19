@@ -5,6 +5,8 @@ import { solveProportions }   from '../src/proportions.js';
 import {
   generateFoliage,
   expandClumpsToLeaves,
+  expandClumpsToCrossedCards,
+  CROSSED_CARD_PLANES,
   LEAVES_PER_CLUMP,
   MAX_LEAVES,
   BARE_FRACTION,
@@ -2119,4 +2121,63 @@ test('expandClumpsToLeaves is deterministic for the same (foliage, genome)', () 
   assert.deepStrictEqual(a.position, b.position);
   assert.deepStrictEqual(a.tangent, b.tangent);
   assert.deepStrictEqual(a.scale, b.scale);
+});
+
+// ---------------------------------------------------------------------------
+// expandClumpsToCrossedCards — SpeedTree-style crossed-card expansion.
+// ---------------------------------------------------------------------------
+
+test('expandClumpsToCrossedCards emits CROSSED_CARD_PLANES cards per anchor', () => {
+  const genome = makeBushyGenome({ structuralSeed: 7 });
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  assert.ok(clumps.count > 0, 'expected non-empty foliage');
+  const out = expandClumpsToCrossedCards(clumps, genome);
+  assert.strictEqual(out.count, clumps.count * CROSSED_CARD_PLANES);
+});
+
+test('expandClumpsToCrossedCards: the K cards share position/scale but differ in roll', () => {
+  const genome = makeBushyGenome({ structuralSeed: 7 });
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  const out = expandClumpsToCrossedCards(clumps, genome);
+  const K = CROSSED_CARD_PLANES;
+  // First anchor → first K instances.
+  for (let k = 0; k < K; k++) {
+    // Same position as the source anchor 0.
+    assert.strictEqual(out.position[k * 3],     clumps.position[0]);
+    assert.strictEqual(out.position[k * 3 + 1], clumps.position[1]);
+    assert.strictEqual(out.position[k * 3 + 2], clumps.position[2]);
+    // Same scale.
+    assert.strictEqual(out.scale[k], clumps.scale[0]);
+    // Roll staggered by k·(π/K) from the source roll. rotation is a Float32Array,
+    // so compare at f32 precision (the f64 expected value is rounded with fround).
+    const expectedRoll = Math.fround(clumps.rotation[0] + k * (Math.PI / K));
+    assert.ok(Math.abs(out.rotation[k] - expectedRoll) < 1e-6,
+      `roll[${k}] expected ${expectedRoll}, got ${out.rotation[k]}`);
+  }
+  // The three rolls are mutually distinct (cards criss-cross).
+  assert.notStrictEqual(out.rotation[0], out.rotation[1]);
+  assert.notStrictEqual(out.rotation[1], out.rotation[2]);
+});
+
+test('expandClumpsToCrossedCards is deterministic and never exceeds the leaf capacity', () => {
+  const genome = makeBushyGenome({ structuralSeed: 21 });
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  const a = expandClumpsToCrossedCards(clumps, genome);
+  const b = expandClumpsToCrossedCards(clumps, genome);
+  assert.deepStrictEqual(a.rotation, b.rotation);
+  assert.deepStrictEqual(a.position, b.position);
+  // LEAVES_PER_CLUMP (6) > CROSSED_CARD_PLANES (3), so a crossed expansion always
+  // fits in the same LEAF_CAPACITY the single-leaf fan allocates.
+  assert.ok(a.count <= MAX_LEAVES * LEAVES_PER_CLUMP);
+  assert.ok(CROSSED_CARD_PLANES <= LEAVES_PER_CLUMP);
+});
+
+test('expandClumpsToCrossedCards passes through empty foliage unchanged', () => {
+  const empty = { count: 0, position: new Float32Array(0), normal: new Float32Array(0),
+    tangent: new Float32Array(0), scale: new Float32Array(0), rotation: new Float32Array(0),
+    ageColor: new Float32Array(0), exposure: new Float32Array(0), boneIndex: new Float32Array(0), shape: 0.5 };
+  assert.strictEqual(expandClumpsToCrossedCards(empty, {}), empty);
 });

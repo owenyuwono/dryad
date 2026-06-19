@@ -1007,3 +1007,78 @@ export function expandClumpsToLeaves(foliage, genome = {}) {
     shape: foliage.shape,
   };
 }
+
+// ---------------------------------------------------------------------------
+// CROSSED_CARD_PLANES — number of intersecting quads emitted per cluster anchor
+// in the 'crossed' (SpeedTree-style) leaf mode. 3 quads criss-crossed at
+// 0°/60°/120° about the card's up axis read as a volumetric puff from any angle.
+// Mirrors leafCardPreview.js's PLANES_PER_CARD.
+// ---------------------------------------------------------------------------
+export const CROSSED_CARD_PLANES = 3;
+
+// ---------------------------------------------------------------------------
+// expandClumpsToCrossedCards — render-path helper (SpeedTree-style crossed cards).
+//
+// For EACH cluster anchor, emit CROSSED_CARD_PLANES instances at the SAME
+// position / scale / normal / tangent / exposure / bone / age, but with the roll
+// (rotation field) staggered by k·(π/CROSSED_CARD_PLANES) so the cards criss-cross
+// about the card's up axis (the tangent). leafMesh.update() rolls each card about
+// its tangent by `rotation` (see buildInstanceMatrix), so staggering rotation alone
+// produces the 0°/60°/120° intersecting-quad cluster of leafCardPreview.js — using
+// the MULTI-LEAF cluster sprite (the viewer/forest build that sprite with
+// leafMode:'crossed', which falls through to the cluster sprite branch).
+//
+// The output is foliage-SoA-shaped, so leaves.update() consumes it unchanged.
+// PURE / RENDER-ONLY: no rng, no generation-pipeline mutation — the layout is a
+// deterministic function of the input anchors. The instance count is K× the input
+// (≤ MAX_LEAVES × CROSSED_CARD_PLANES, within LEAF_CAPACITY since LEAVES_PER_CLUMP
+// = 6 > 3).
+// ---------------------------------------------------------------------------
+
+export function expandClumpsToCrossedCards(foliage, genome = {}) {
+  const inCount = foliage.count | 0;
+  const K = CROSSED_CARD_PLANES;
+  if (K <= 1 || inCount === 0) return foliage;
+
+  const maxOut    = inCount * K;
+  const position  = new Float32Array(3 * maxOut);
+  const normal    = new Float32Array(3 * maxOut);
+  const tangent   = new Float32Array(3 * maxOut);
+  const scale     = new Float32Array(maxOut);
+  const rotation  = new Float32Array(maxOut);
+  const ageColor  = new Float32Array(maxOut);
+  const exposure  = new Float32Array(maxOut);
+  const boneIndex = new Float32Array(maxOut);
+
+  const inPos = foliage.position, inNrm = foliage.normal, inTan = foliage.tangent;
+  const inScale = foliage.scale, inRot = foliage.rotation, inAge = foliage.ageColor;
+  const inExp = foliage.exposure ?? null, inBone = foliage.boneIndex ?? null;
+
+  // Stagger each plane's roll evenly across a half-turn (planes are double-sided,
+  // so π / K spacing gives the full criss-cross without redundant back-to-back quads).
+  const ROLL_STEP = Math.PI / K;
+
+  let out = 0;
+  for (let c = 0; c < inCount; c++) {
+    const c3 = c * 3;
+    const roll0 = inRot[c];
+    for (let k = 0; k < K; k++) {
+      const o3 = out * 3;
+      position[o3]     = inPos[c3];     position[o3 + 1] = inPos[c3 + 1];     position[o3 + 2] = inPos[c3 + 2];
+      normal[o3]       = inNrm[c3];     normal[o3 + 1]   = inNrm[c3 + 1];     normal[o3 + 2]   = inNrm[c3 + 2];
+      tangent[o3]      = inTan[c3];     tangent[o3 + 1]  = inTan[c3 + 1];     tangent[o3 + 2]  = inTan[c3 + 2];
+      scale[out]       = inScale[c];
+      rotation[out]    = roll0 + k * ROLL_STEP;
+      ageColor[out]    = inAge[c];
+      exposure[out]    = inExp  ? inExp[c]  : 1.0;
+      boneIndex[out]   = inBone ? inBone[c] : 0;
+      out++;
+    }
+  }
+
+  return {
+    count: out,
+    position, normal, tangent, scale, rotation, ageColor, exposure, boneIndex,
+    shape: foliage.shape,
+  };
+}

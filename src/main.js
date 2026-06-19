@@ -340,14 +340,35 @@ function refreshInspector(resolved) {
   const btn  = document.getElementById('leaf-mode-btn');
   const icon = document.getElementById('leaf-mode-icon');
   if (!btn) return;
+  // 3-way cycle: single → cluster → crossed → single.
+  //   single  = one leaf per card           (icon '1×')
+  //   cluster = a multi-leaf sprig per card  (icon 'N×')
+  //   crossed = K=3 criss-crossed sprig cards (SpeedTree puff; icon '✳')
   let mode = 'single';
+  const NEXT = { single: 'cluster', cluster: 'crossed', crossed: 'single' };
+  const ICON = { single: '1×', cluster: 'N×', crossed: '✳' };
   btn.addEventListener('click', () => {
-    mode = (mode === 'single') ? 'cluster' : 'single';
-    btn.classList.toggle('active', mode === 'cluster');
-    if (icon) icon.textContent = (mode === 'single') ? '1×' : 'N×';
+    mode = NEXT[mode] || 'single';
+    btn.classList.toggle('active', mode !== 'single');
+    if (icon) icon.textContent = ICON[mode];
     if (typeof viewer.setLeafMode === 'function') viewer.setLeafMode(mode);
     renderCurrent();   // rebuild the current tree with the new leaf mode
   });
+})();
+
+// Wire first-person walk mode — clicking enters Pointer-Lock FPS navigation
+// (WASD + mouse-look, Esc to exit). The button shows .active while walking;
+// the viewer clears it via onWalkExit when pointer lock is released (Esc).
+(function wireWalkMode() {
+  const btn = document.getElementById('walk-btn');
+  if (!btn || typeof viewer.enterWalk !== 'function') return;
+  btn.addEventListener('click', () => {
+    btn.classList.add('active');
+    viewer.enterWalk();
+  });
+  if (typeof viewer.onWalkExit === 'function') {
+    viewer.onWalkExit(() => btn.classList.remove('active'));
+  }
 })();
 
 // =============================================================================

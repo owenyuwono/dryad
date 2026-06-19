@@ -1153,9 +1153,19 @@
          title="Leaf droop (gravity bend)">
   <div class="rm-divider"></div>
   <button class="rm-btn" id="leaf-mode-btn"
-          data-label="Leaves per card: 1 / many"
-          title="Toggle single-leaf vs clustered cards">
+          data-label="Leaf cards: single / cluster / crossed"
+          title="Cycle leaf cards: single-leaf → clustered sprig → crossed quads">
     <span id="leaf-mode-icon" class="rm-texticon">1&times;</span>
+  </button>
+  <div class="rm-divider"></div>
+  <button class="rm-btn" id="walk-btn" data-label="Walk (FPS) — Esc to exit" title="Walk (FPS) — Esc to exit">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="8.5" cy="2.6" r="1.5" fill="currentColor"/>
+      <path d="M8.5 4.4 L7 8 L5 9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M8.5 4.4 L9.6 7.2 L11.5 8.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M7 8 L6.2 11.5 L4.4 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M7 8 L8.6 11 L10.4 13.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
   </button>
   <div class="rm-divider"></div>
   <span class="rm-slider-label" title="Forest — number of trees" aria-hidden="true" style="display:inline-flex;align-items:center;">
