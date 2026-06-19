@@ -31,7 +31,7 @@ export const TREE_DEFAULT = {
   tillering:        0.00,  // pinned to 0: exactly one trunk for a tree
   radialOrder:      0.55,
   appendageBreadth: 0.45,
-  appendageDensity: 0.90,  // dense foliage on twig tips
+  appendageDensity: 0.99,  // single foliage-density gene (former leafDensity folded in)
   segmentation:     0.35,  // ~6 trunk segments → tall clear trunk
   succulence:       0.12,
   stemGirth:        0.68,
@@ -46,13 +46,13 @@ export const TREE_DEFAULT = {
   droopBias:        0.00,  // identity (0) = no droop; was inert, now wired
   pigment:          0.33,  // hue≈120° on the full-hue wheel → leaf green
   leafSize:         1.00,
-  leafDensity:      1.10,
   jitter:           1.00,
   leafWidth:        0.50,  // 0.5 = medium breadth via superformula
   leafLength:       0.45,
   leafTip:          0.40,
   leafSerration:    0.00,
   leafLobing:       0.00,
+  leafSkew:         0.50,  // symmetric ovate (identity); lower = widest-toward-base + acuminate tip
   structuralSeed:   1337,
   // Root system defaults
   rootCount:        0.50,  // ~4 major laterals — good oak/beech spread
@@ -63,8 +63,15 @@ export const TREE_DEFAULT = {
   rootBranchiness:  0.45,  // moderate sub-root branching
   rootTaper:        0.50,  // neutral taper
   // Bark + weep genes (draws 36–38)
-  barkColor:        1.00,  // brown bark (1.0 = furrowed-brown identity)
-  barkPattern:      1.00,  // deep furrows (identity)
+  barkHue:          1.00,  // orthogonal bark (was barkColor 1.00/barkPattern 1.00)
+  barkLightness:    0.22,
+  barkRelief:       1.00,
+  barkLenticels:    0.00,
+  barkScale:        0.50,
+  barkOrient:       0.70,  // crack orientation — 0.70 = identity vertical furrows (gain==1)
+  barkPlates:       0.45,  // ridges↔plates morphology — 0.45 = identity (legacy crack depth)
+  barkShed:         0.00,  // exfoliation — 0 = intact bark (identity no-op)
+  barkUnderHue:     0.75,  // under-bark hue (only active when barkShed > 0)
   weep:             0.00,  // no pendulous droop
   // trunkHeight (draw 39) — 0.50 = identity (1.0× factor)
   trunkHeight:      0.50,
@@ -75,17 +82,14 @@ export const TREE_DEFAULT = {
   // New inert genes (draws 43–45) — identity defaults, no consumer wired yet
   woodiness:        1.00,  // 1.0 = fully woody identity (no-op)
   whorl:            0.00,  // 0 = no whorled branching (no-op)
+  crownStart:       1.00,  // 1.0 = crown forks at the trunk top (identity); <1 = branches start lower
   tipTuft:          0.00,  // 0 = no tip tuft (no-op)
-  // New inert genes (draws 46–48) — identity defaults, no consumer wired yet
-  needleLeaf:       0.00,  // 0 = broad leaf (no-op)
-  leafScale:        1.00,  // 1.0 = no scaling (identity)
-  frondLeaf:        0.00,  // 0 = broadleaf sprite (no-op)
+  leafDivision:     0.00,  // 0 = simple blade (needle = narrow leafWidth); 1 = compound/frond
+  frondFan:         0.00,  // 0 = pinnate/feather frond (identity); 1 = palmate/fan
   // phototropism (draw 49) — 1.0 = full sun-lean (identity, existing trees unchanged)
   phototropism:     1.00,
   // trunkTaper (draw 50) — 0 = identity (trunk taper unchanged)
   trunkTaper:       0.00,
-  // trunkRings (draw 51) — 0 = identity (no ring banding, bark byte-identical)
-  trunkRings:       0.00,
 };
 
 // ---------------------------------------------------------------------------
@@ -133,15 +137,18 @@ export const PRESETS = [
       leafLength:       0.50,
       leafTip:          0.55,
       leafSize:         1.10,
-      leafDensity:      1.15,
+      appendageDensity: 1.035,  // single density gene (former leafDensity folded in)
       pigment:          0.30,  // dark forest green
       trunkHeight:      0.5146918888426049,  // re-tuned: reproduces prior 0.55 factor (1.07) under new 10^(2*(th-0.5)) mapping
       rootCount:        0.60,
       rootSpread:       0.70,
       rootFlare:        0.45,
       rootButtress:     0.20,
-      barkColor:        0.90,  // dark brown furrowed bark
-      barkPattern:      0.90,
+      barkHue:          0.90,  // orthogonal bark (was barkColor 0.90/barkPattern 0.90)
+      barkLightness:    0.29,
+      barkRelief:       0.90,
+      barkLenticels:    0.14,
+      barkScale:   0.50,
       structuralSeed:   0x4C2F7A11 >>> 0,
     },
   },
@@ -196,10 +203,13 @@ export const PRESETS = [
       leafLength:       0.50,
       leafTip:          0.45,
       leafSize:         1.00,
-      leafDensity:      1.20,
+      appendageDensity: 1.08,  // single density gene (former leafDensity folded in)
       pigment:          0.31,
-      barkColor:        0.75,  // silver-grey smooth beech bark
-      barkPattern:      0.35,  // smoother than oak, some texture
+      barkHue:          0.75,  // orthogonal bark (was barkColor 0.75/barkPattern 0.35)
+      barkLightness:    0.39,
+      barkRelief:       0.35,
+      barkLenticels:    0.91,
+      barkScale:   0.50,
       trunkHeight:      0.5337214213881903,  // re-tuned: reproduces prior 0.62 factor under new mapping (tall)
       rootFlare:        0.30,
       rootSpread:       0.60,
@@ -225,17 +235,22 @@ export const PRESETS = [
       rigidity:         0.35,
       branchAngle:      0.55,
       apicalBias:       0.65,
-      leafDensity:      1.45,
+      appendageDensity: 1.305,  // single density gene (former leafDensity folded in)
       leafSize:         0.85,
-      leafSerration:    0.50,
-      leafWidth:        0.45,
-      leafLength:       0.45,
+      leafSerration:    0.55,  // finely-toothed birch margin (serration math now scale-relative)
+      leafWidth:        0.70,  // broader ovate — birch leaves are ~1.3-2× longer than wide, not a narrow blade
+      leafLength:       0.20,  // shorter axial stretch → triangular-ovate, not an elongated ellipse
       leafLobing:       0.00,
-      leafTip:          0.35,
+      leafSkew:         0.30,  // KEY: widest point in the lower third + acuminate tip — true birch ovate
+      leafTip:          0.30,  // acuminate (drawn-out pointed) tip
       pigment:          0.30,
-      barkColor:        0.05,  // pale white/cream — classic birch bark
-      barkPattern:      0.10,  // smooth with lenticels
+      barkHue:          0.05,  // orthogonal bark (was barkColor 0.05/barkPattern 0.10)
+      barkLightness:    0.87,
+      barkRelief:       0.10,
+      barkLenticels:    1.00,
+      barkScale:   0.50,
       trunkHeight:      0.5146918888426049,  // re-tuned: reproduces prior 0.55 factor (1.07) under new mapping
+      crownStart:       0.45,  // branches start ~45% up the trunk (crown lower than the top-only default)
       structuralSeed:   0x7F3A1E05 >>> 0,
     },
   },
@@ -265,11 +280,14 @@ export const PRESETS = [
       leafLength:       0.55,
       leafTip:          0.50,
       leafSize:         0.95,
-      leafDensity:      1.20,
+      appendageDensity: 1.08,  // single density gene (former leafDensity folded in)
       pigment:          0.32,
       trunkHeight:      0.5230523936230194,  // re-tuned: reproduces prior 0.58 factor under new mapping
-      barkColor:        0.85,
-      barkPattern:      0.80,
+      barkHue:          0.85,  // orthogonal bark (was barkColor 0.85/barkPattern 0.80)
+      barkLightness:    0.32,
+      barkRelief:       0.80,
+      barkLenticels:    0.28,
+      barkScale:   0.50,
       structuralSeed:   0x6B4E3C28 >>> 0,
     },
   },
@@ -304,14 +322,17 @@ export const PRESETS = [
       leafSerration:    0.20,  // slight serration
       leafLobing:       0.00,
       leafSize:         1.20,  // larger clusters → full hanging curtain
-      leafDensity:      1.35,  // dense curtain of foliage
+      appendageDensity: 1.215,  // dense curtain (former leafDensity folded in)
       pigment:          0.34,  // fresh willow green
       rootCount:        0.55,
       rootSpread:       0.65,  // willows spread wide for water
       weep:             0.55,  // sqrt(0.55)≈0.74 effective hang — strong leaf fall
       trunkHeight:      0.5413926851582250,  // re-tuned: reproduces prior 0.65 factor (tall — high crown from which branches cascade)
-      barkColor:        0.80,
-      barkPattern:      0.65,
+      barkHue:          0.80,  // orthogonal bark (was barkColor 0.80/barkPattern 0.65)
+      barkLightness:    0.36,
+      barkRelief:       0.65,
+      barkLenticels:    0.49,
+      barkScale:   0.50,
       structuralSeed:   0xE5D2A0F7 >>> 0,
     },
   },
@@ -341,12 +362,15 @@ export const PRESETS = [
       leafSerration:    0.40,
       leafLobing:       0.00,
       leafSize:         0.85,
-      leafDensity:      1.15,
+      appendageDensity: 1.035,  // single density gene (former leafDensity folded in)
       pigment:          0.36,  // greener spring foliage
       weep:             0.30,  // gentler droop than willow
       trunkHeight:      0.5059965573296284,  // re-tuned: reproduces prior 0.52 factor under new mapping
-      barkColor:        0.70,
-      barkPattern:      0.50,  // smooth reddish cherry bark
+      barkHue:          0.70,  // orthogonal bark (was barkColor 0.70/barkPattern 0.50)
+      barkLightness:    0.42,
+      barkRelief:       0.50,
+      barkLenticels:    0.70,
+      barkScale:   0.50,
       rootSpread:       0.50,
       structuralSeed:   0x3B9F1D77 >>> 0,
     },
@@ -379,11 +403,14 @@ export const PRESETS = [
       leafSerration:    0.15,
       leafLobing:       0.00,
       leafSize:         0.85,
-      leafDensity:      1.25,
+      appendageDensity: 1.125,  // single density gene (former leafDensity folded in)
       pigment:          0.32,
       trunkHeight:      0.5761441721915282,  // re-tuned: reproduces prior 0.80 factor (tall spire) under new mapping
-      barkColor:        0.85,
-      barkPattern:      0.75,
+      barkHue:          0.85,  // orthogonal bark (was barkColor 0.85/barkPattern 0.75)
+      barkLightness:    0.32,
+      barkRelief:       0.75,
+      barkLenticels:    0.35,
+      barkScale:   0.50,
       rootFlare:        0.20,
       rootSpread:       0.40,  // narrow deep roots for a columnar tree
       structuralSeed:   0xC7A3F209 >>> 0,
@@ -411,27 +438,29 @@ export const PRESETS = [
       droopBias:        0.00,  // reset to identity (was inert 0.20)
       rigidity:         0.72,
       verticality:      0.74,
-      stemGirth:        0.55,
+      stemGirth:        0.32,  // slim conifer bole — girth now couples to height (allometry), so the old stout 0.55 read as a baobab
       taper:            0.78,
       lengthRatio:      0.65,
       appendageBreadth: 0.20,  // wider than needle to be visible as spray
-      appendageDensity: 0.95,
-      leafWidth:        0.18,  // narrow needle-sprig cards — mass comes from leafDensity, not card width
-      leafLength:       0.70,  // moderately elongated needle
+      appendageDensity: 1.425,  // single density gene (former leafDensity folded in)
+      leafWidth:        0.04,  // KEY: very narrow blade = a NEEDLE (leafDivision stays 0)
+      leafLength:       0.85,  // long needle
       leafTip:          0.15,  // sharp pointed tip
       leafSerration:    0.00,
       leafLobing:       0.00,
-      leafSize:         1.50,  // larger clusters → denser reading solid mass (was 1.10; max is 1.6)
-      leafDensity:      1.50,  // at schema maximum — fills into a solid conifer crown (was 1.40; range [0.5, 1.5])
+      leafSize:         1.50,  // larger clusters → denser reading solid mass
       pigment:          0.27,  // deep conifer green
-      barkColor:        0.85,
-      barkPattern:      0.88,  // rough scaly conifer bark
+      barkHue:          0.85,  // orthogonal bark (was barkColor 0.85/barkPattern 0.88)
+      barkLightness:    0.32,
+      barkRelief:       0.88,
+      barkLenticels:    0.17,
+      barkScale:   0.50,
       trunkHeight:      0.70,  // taller conifer per user (~2.51× under new 10^(2*(th-0.5)) mapping)
       rootDepth:        0.55,
       rootSpread:       0.50,
       tipTuft:          0.65,  // raised: foliage covers tier branches not just tips (was 0.40)
       whorl:            0.35,  // subtle tiering — spruce is denser/more continuous than pine
-      needleLeaf:       1.00,  // full needle-fascicle sprite for conifer foliage
+      leafDivision:     0.00,  // simple blade; needle character comes from the narrow leafWidth
       structuralSeed:   0x5E8A4D32 >>> 0,
     },
   },
@@ -455,28 +484,30 @@ export const PRESETS = [
       droopBias:        0.00,  // reset to identity (was inert 0.05)
       rigidity:         0.78,  // stiff woody branches
       verticality:      0.70,
-      stemGirth:        0.60,  // stout trunk
+      stemGirth:        0.30,  // slim pine bole — girth now couples to height (allometry), so the old stout 0.60 read as a baobab
       taper:            0.75,
       lengthRatio:      0.72,  // slightly longer arms → open crown
       appendageBreadth: 0.20,
-      appendageDensity: 0.95,  // raised to match denser canopy intent (was 0.92)
-      leafWidth:        0.16,  // narrow needle-sprig cards — mass comes from leafDensity, not card width
-      leafLength:       0.65,
+      appendageDensity: 1.425,  // single density gene (former leafDensity folded in)
+      leafWidth:        0.04,  // KEY: very narrow blade = a NEEDLE (leafDivision stays 0)
+      leafLength:       0.82,
       leafTip:          0.12,  // very sharp tip
       leafSerration:    0.00,
       leafLobing:       0.00,
-      leafSize:         1.40,  // larger clusters → solid needle mass at branch ends (was 1.15)
-      leafDensity:      1.50,  // substantially denser — fills upper crown into solid mass (was 1.30)
+      leafSize:         1.40,  // larger clusters → solid needle mass at branch ends
       pigment:          0.26,  // slightly darker/blue-green than spruce
-      barkColor:        0.80,
-      barkPattern:      0.92,  // deeply plated pine bark
+      barkHue:          0.80,  // orthogonal bark (was barkColor 0.80/barkPattern 0.92)
+      barkLightness:    0.36,
+      barkRelief:       0.92,
+      barkLenticels:    0.11,
+      barkScale:   0.50,
       trunkHeight:      0.72,  // taller conifer per user (~2.75× under new 10^(2*(th-0.5)) mapping); bare trunk prominent; whorl=0.65 → startFrac≈0.358 of trunk
       rootDepth:        0.60,
       rootSpread:       0.55,
       rootFlare:        0.25,
       whorl:            0.65,  // KEY: distinct tiered whorled branch levels (core-emission BFS; was 0.58 additive post-pass)
       tipTuft:          0.55,  // raised: foliage covers branch length not just tip pompoms (was 0.32)
-      needleLeaf:       1.00,  // full needle-fascicle sprite for conifer foliage
+      leafDivision:     0.00,  // simple blade; needle character comes from the narrow leafWidth
       structuralSeed:   0x3A1CF890 >>> 0,
     },
   },
@@ -507,28 +538,80 @@ export const PRESETS = [
       succulence:       0.30,  // slim trunk; trunkTaper handles cylindrical now
       segmentation:     0.70,  // ring-segmented leaf-scar trunk texture
       appendageBreadth: 0.78,  // broad lamina fronds
-      appendageDensity: 1.00,  // schema max — densest frond attachments along crown
+      appendageDensity: 1.35,  // single density gene (former leafDensity folded in)
       leafWidth:        0.90,  // very broad pinnate frond
       leafLength:       0.95,  // long arching frond
       leafTip:          0.32,
       leafSerration:    0.05,
       leafLobing:       0.58,  // pinnate frond split — palm character
-      leafSize:         1.60,  // schema max — largest possible frond clusters
-      leafDensity:      1.35,  // raised from 1.10 for fuller frond mass per direction
+      leafSize:         3.20,  // big arching fronds (former leafScale ×2 folded into leafSize)
       pigment:          0.36,  // bright tropical green
       trunkHeight:      0.90,  // taller bare trunk
-      barkColor:        0.65,  // grey-brown palm trunk
-      barkPattern:      0.20,  // smooth column — palm trunks are not deeply furrowed
+      barkHue:          0.65,  // orthogonal bark (was barkColor 0.65/barkPattern 0.20)
+      barkLightness:    0.46,
+      barkRelief:       0.20,
+      barkLenticels:    1.00,
+      barkScale:   0.50,
       rootFlare:        0.12,
       rootButtress:     0.05,
       rootSpread:       0.45,
       rootDepth:        0.55,
-      leafScale:        2.00,  // big fronds — large arching pinnate leaves
-      frondLeaf:        1.00,  // KEY: palm-frond sprite (pinnate frond shape)
+      leafDivision:     1.00,  // KEY: fully compound (pinnate frond)
+      frondFan:         0.00,  // pinnate/feather frond — coconut/date character
       phototropism:     0.00,  // KEY: no sun-lean — fronds keep full-circle skeleton azimuths (fixes crown gap)
       trunkTaper:       0.85,  // KEY: near-cylindrical trunk — trunkTaper now owns the columnar look
-      trunkRings:       0.50,  // visible leaf-scar ring banding — the defining palm trunk feature
+      barkOrient:       0.00,  // KEY: horizontal-ring orientation — palm leaf-scar banding (ex-trunkRings)
       structuralSeed:   0xB3F2C851 >>> 0,
+    },
+  },
+
+  // Fan palm (Washingtonia) — same frond grammar as the palm, but frondFan=1 collapses
+  // the rachis to a petiole so leaflets radiate in a costapalmate fan. Stouter, shorter
+  // trunk; leafLobing high → many fan segments. Proves the fan↔feather axis is continuous.
+  {
+    id:           'fan-palm',
+    label:        'Fan Palm',
+    category:     'Tropical',
+    experimental: false,
+    genome: {
+      ...TREE_DEFAULT,
+      branchiness:      0.12,
+      branchFactorN:    0.28,
+      tillering:        0.00,
+      rosette:          1.00,  // full apical crown of fronds
+      branchAngle:      0.72,
+      apicalBias:       0.95,  // bare pole
+      droopBias:        0.00,
+      rigidity:         0.62,  // stiffer fan fronds
+      stemGirth:        0.62,  // stouter bole than the feather palm
+      taper:            0.30,
+      succulence:       0.32,
+      segmentation:     0.70,
+      appendageBreadth: 0.80,
+      appendageDensity: 1.35,
+      leafWidth:        0.95,  // broad fan
+      leafLength:       0.90,
+      leafTip:          0.30,
+      leafSerration:    0.05,
+      leafLobing:       0.85,  // many radiating fan segments
+      leafSize:         2.90,
+      pigment:          0.34,
+      trunkHeight:      0.78,  // shorter than the coconut palm
+      barkHue:          0.60,
+      barkLightness:    0.44,
+      barkRelief:       0.30,
+      barkLenticels:    0.85,
+      barkScale:   0.50,
+      rootFlare:        0.14,
+      rootButtress:     0.05,
+      rootSpread:       0.45,
+      rootDepth:        0.55,
+      leafDivision:     1.00,  // fully compound (palmate fan frond)
+      frondFan:         1.00,  // KEY: palmate fan — rachis collapses, leaflets radiate from base
+      phototropism:     0.00,
+      trunkTaper:       0.82,
+      barkOrient:       0.00,  // horizontal-ring orientation — fan-palm leaf-scar banding (ex-trunkRings)
+      structuralSeed:   0x5C1A7E93 >>> 0,
     },
   },
 
@@ -555,16 +638,18 @@ export const PRESETS = [
       leafTip:          0.40,
       leafSerration:    0.05,
       leafLobing:       0.20,
-      leafSize:         1.40,  // large tropical leaves
-      leafDensity:      1.00,
+      leafSize:         2.24,  // large tropical leaves (former leafScale ×1.6 folded into leafSize)
+      appendageDensity: 0.90,  // single density gene (former leafDensity folded in)
       pigment:          0.37,  // vivid tropical green
       trunkHeight:      0.5337214213881903,  // re-tuned: reproduces prior 0.62 factor under new mapping
-      barkColor:        0.70,
-      barkPattern:      0.55,
+      barkHue:          0.70,  // orthogonal bark (was barkColor 0.70/barkPattern 0.55)
+      barkLightness:    0.42,
+      barkRelief:       0.55,
+      barkLenticels:    0.63,
+      barkScale:   0.50,
       rootFlare:        0.40,
       rootButtress:     0.30,
       rootSpread:       0.65,
-      leafScale:        1.60,  // big tropical leaves
       structuralSeed:   0xF2A8340B >>> 0,
     },
   },
@@ -594,13 +679,15 @@ export const PRESETS = [
       leafTip:          0.55,  // rounded to slightly pointed tip
       leafSerration:    0.10,  // slightly ragged margins (natural tearing)
       leafLobing:       0.30,  // slight lobing (pinnately ribbed midrib)
-      leafSize:         1.40,  // large clusters
-      leafDensity:      0.70,  // fewer very large leaves
-      leafScale:        2.50,  // mega-fronds — the defining banana character
+      leafSize:         3.50,  // mega-fronds (former leafScale ×2.5 folded into leafSize)
+      appendageDensity: 0.63,  // single density gene (former leafDensity folded in)
       pigment:          0.37,  // vivid tropical green
       trunkHeight:      0.40,  // short — banana is a low pseudostem
-      barkColor:        0.60,  // greenish sheath
-      barkPattern:      0.30,  // smooth-ish wrapped sheath
+      barkHue:          0.60,  // orthogonal bark (was barkColor 0.60/barkPattern 0.30)
+      barkLightness:    0.49,
+      barkRelief:       0.30,
+      barkLenticels:    0.98,
+      barkScale:   0.50,
       rootFlare:        0.20,
       rootButtress:     0.08,
       rootSpread:       0.50,
@@ -632,7 +719,7 @@ export const PRESETS = [
       droopBias:        0.00,  // reset to identity (was inert 0.10)
       rigidity:         0.42,
       branchAngle:      0.65,  // wide spreading branches
-      leafDensity:      1.30,
+      appendageDensity: 1.17,  // single density gene (former leafDensity folded in)
       leafSize:         0.85,
       leafWidth:        0.55,
       leafLength:       0.38,
@@ -643,8 +730,11 @@ export const PRESETS = [
       rootSpread:       0.65,
       rootFlare:        0.15,
       trunkHeight:      0.10,  // near-minimum — barely any trunk above ground
-      barkColor:        0.65,
-      barkPattern:      0.45,
+      barkHue:          0.65,  // orthogonal bark (was barkColor 0.65/barkPattern 0.45)
+      barkLightness:    0.46,
+      barkRelief:       0.45,
+      barkLenticels:    0.77,
+      barkScale:   0.50,
       structuralSeed:   0x2C8F4B91 >>> 0,
     },
   },
@@ -670,7 +760,7 @@ export const PRESETS = [
       droopBias:        0.00,  // reset to identity (was inert 0.12)
       rigidity:         0.48,
       branchAngle:      0.62,
-      leafDensity:      1.25,
+      appendageDensity: 1.125,  // single density gene (former leafDensity folded in)
       leafSize:         0.90,
       leafWidth:        0.60,
       leafLength:       0.50,
@@ -681,8 +771,11 @@ export const PRESETS = [
       rootCount:        0.50,
       rootSpread:       0.60,
       rootFlare:        0.10,
-      barkColor:        0.72,
-      barkPattern:      0.38,
+      barkHue:          0.72,  // orthogonal bark (was barkColor 0.72/barkPattern 0.38)
+      barkLightness:    0.41,
+      barkRelief:       0.38,
+      barkLenticels:    0.87,
+      barkScale:   0.50,
       structuralSeed:   0xB4A2C831 >>> 0,
     },
   },
@@ -713,17 +806,19 @@ export const PRESETS = [
       flatness:         0.00,  // circular cross-section
       segmentation:     0.20,
       appendageBreadth: 0.05,  // spine-like appendages
-      appendageDensity: 0.70,
+      appendageDensity: 0.385,  // single density gene (former leafDensity folded in)
       leafWidth:        0.05,
       leafLength:       0.70,
       leafTip:          0.10,
       leafSerration:    0.00,
       leafLobing:       0.00,
       leafSize:         0.65,
-      leafDensity:      0.55,
       pigment:          0.30,  // grey-green — waxy cactus green
-      barkColor:        0.55,
-      barkPattern:      0.40,
+      barkHue:          0.55,  // orthogonal bark (was barkColor 0.55/barkPattern 0.40)
+      barkLightness:    0.53,
+      barkRelief:       0.40,
+      barkLenticels:    0.84,
+      barkScale:   0.50,
       trunkHeight:      0.5413926851582250,  // re-tuned: reproduces prior 0.65 factor under new mapping
       rootDepth:        0.80,  // deep taproot for desert water
       rootSpread:       0.80,  // wide surface roots for rain capture
@@ -756,17 +851,19 @@ export const PRESETS = [
       flatness:         0.00,
       segmentation:     0.15,
       appendageBreadth: 0.05,
-      appendageDensity: 0.80,
+      appendageDensity: 0.40,  // single density gene (former leafDensity folded in)
       leafWidth:        0.05,
       leafLength:       0.65,
       leafTip:          0.08,
       leafSerration:    0.00,
       leafLobing:       0.00,
-      leafSize:         0.60,  // minimum per schema range [0.6, 1.6]
-      leafDensity:      0.50,
+      leafSize:         0.60,  // small leaves
       pigment:          0.29,  // blue-grey-green
-      barkColor:        0.52,
-      barkPattern:      0.38,
+      barkHue:          0.52,  // orthogonal bark (was barkColor 0.52/barkPattern 0.38)
+      barkLightness:    0.55,
+      barkRelief:       0.38,
+      barkLenticels:    0.87,
+      barkScale:   0.50,
       trunkHeight:      0.25,  // squat — barely clears ground
       rootDepth:        0.85,
       rootSpread:       0.75,
@@ -808,10 +905,13 @@ export const PRESETS = [
       leafSerration:    0.70,  // deeply pinnate / serrate frond margins
       leafLobing:       0.78,  // pinnate lobing → strong frond character
       leafSize:         1.20,
-      leafDensity:      1.10,
+      appendageDensity: 0.99,  // single density gene (former leafDensity folded in)
       pigment:          0.30,  // deep fern green
-      barkColor:        0.45,
-      barkPattern:      0.20,
+      barkHue:          0.45,  // orthogonal bark (was barkColor 0.45/barkPattern 0.20)
+      barkLightness:    0.59,
+      barkRelief:       0.20,
+      barkLenticels:    1.00,
+      barkScale:   0.50,
       trunkHeight:      0.12,  // nearly ground-level — ferns have no trunk
       rootDepth:        0.20,
       rootSpread:       0.55,
@@ -853,10 +953,13 @@ export const PRESETS = [
       leafSerration:    0.38,  // frilled / undulate blade edges
       leafLobing:       0.30,
       leafSize:         1.50,
-      leafDensity:      0.75,
+      appendageDensity: 0.675,  // single density gene (former leafDensity folded in)
       pigment:          0.22,  // olive-brown kelp colour
-      barkColor:        0.45,
-      barkPattern:      0.30,
+      barkHue:          0.45,  // orthogonal bark (was barkColor 0.45/barkPattern 0.30)
+      barkLightness:    0.59,
+      barkRelief:       0.30,
+      barkLenticels:    0.98,
+      barkScale:   0.50,
       trunkHeight:      0.5651668842475030,  // re-tuned: reproduces prior 0.75 factor under new mapping
       rootDepth:        0.15,  // holdfasts, not deep roots
       rootSpread:       0.40,

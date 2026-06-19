@@ -84,8 +84,7 @@ export function skin(graph, envelope, genome = null) {
   // When genome is null (legacy 2-arg call), no extra fields are added.
   const genomeFields = genome !== null ? {
     pigment:     genome.pigment,
-    leafSize:    genome.leafSize,
-    leafDensity: genome.leafDensity
+    leafSize:    genome.leafSize
   } : {};
 
   // Surface-relief scalars for shader uniforms uRibbing, uSpininess, uSegmentation.

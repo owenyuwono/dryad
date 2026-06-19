@@ -49,7 +49,7 @@ import { createGround }        from './ground.js';
 import { WIND_UNIFORM_DEFAULTS } from './windGlsl.js';
 import { WIND_TEX_WIDTH }      from './windSkinGlsl.js';
 import { createWindSolver }    from './windSolver.js';
-import { generateFoliage }     from './foliage.js';
+import { generateFoliage, expandClumpsToLeaves } from './foliage.js';
 
 // =============================================================================
 // CONSTANTS
@@ -336,6 +336,7 @@ export function createViewer(canvas) {
 
   // Current leaf texture — tracked for disposal on next setPlant call.
   let currentLeafTex = null;
+  let currentLeafNormalTex = null;
 
   // ---------------------------------------------------------------------------
   // Post-processing composer
@@ -391,6 +392,12 @@ export function createViewer(canvas) {
   let windEnabled    = false;
   let windStrength   = WIND_STRENGTH_FALLBACK; // target strength, applied when enabled
   let windTime       = WIND_UNIFORM_DEFAULTS.uTime;
+
+  // Leaf rendering mode: 'single' = one leaf per card (clumps fanned out by
+  // expandClumpsToLeaves); 'cluster' = a multi-leaf sprig painted into one card
+  // (cheaper — far fewer instances/triangles). Read in setPlant; toggled via
+  // setLeafMode() + a caller re-render.
+  let _leafMode = 'single';
 
   // Bone DataTexture — allocated/replaced each setPlant call (disposed on regenerate).
   // Layout: width=WIND_TEX_WIDTH (4), height=MAX_WIND_BONES; each row is one bone mat4
@@ -633,6 +640,9 @@ export function createViewer(canvas) {
       branchGeometry.setAttribute('uv',       new THREE.BufferAttribute(g.uvs,       2));
       // barkMaterial REQUIRES a per-vertex float 'ao' attribute.
       branchGeometry.setAttribute('ao',       new THREE.BufferAttribute(g.ao,        1));
+      // barkMaterial scales its bark feature size to the true local tube radius (world
+      // units) via this per-vertex 'aRadius' attribute (not the broken length(xz) proxy).
+      branchGeometry.setAttribute('aRadius',  new THREE.BufferAttribute(g.radii,     1));
       // barkMaterial wind sway reads a per-vertex 'windWeight' attribute
       // (0 = rigid trunk/roots, 1 = flexible twigs).
       branchGeometry.setAttribute('windWeight', new THREE.BufferAttribute(g.windWeight, 1));
@@ -717,13 +727,19 @@ export function createViewer(canvas) {
       // without triggering a shader recompile.
       // lightDir/skyColor/groundColor are not bark uniforms; they drive the scene
       // lights and are handled below via sunLight + setSkyFromLightDir.
-      // barkColor/barkPattern default-guarded in case the genome gene isn't wired yet.
+      // Orthogonal bark axes — default-guarded in case a gene isn't wired yet.
       barkCtl.setGenome({
-        woodiness:   resolved.woodiness   ?? 1.0,
-        pigment:     resolved.pigment,
-        barkColor:   resolved.barkColor   ?? 1.0,
-        barkPattern: resolved.barkPattern ?? 1.0,
-        trunkRings:  resolved.trunkRings  ?? 0,
+        woodiness:      resolved.woodiness      ?? 1.0,
+        pigment:        resolved.pigment,
+        barkHue:        resolved.barkHue        ?? 0.85,
+        barkLightness:  resolved.barkLightness  ?? 0.28,
+        barkRelief:     resolved.barkRelief     ?? 1.0,
+        barkLenticels:  resolved.barkLenticels  ?? 0.0,
+        barkScale:      resolved.barkScale      ?? 0.5,
+        barkOrient:     resolved.barkOrient     ?? 0.7,
+        barkPlates:     resolved.barkPlates     ?? 0.45,
+        barkShed:       resolved.barkShed       ?? 0.0,
+        barkUnderHue:   resolved.barkUnderHue   ?? 0.75,
       });
 
       // Align the procedural sky's sun with the scene light direction so the
@@ -764,10 +780,14 @@ export function createViewer(canvas) {
       // 5. Leaves
       // -----------------------------------------------------------------------
       if (resolved.foliage) {
-        // Dispose previous leaf texture.
+        // Dispose previous leaf textures (colour + normal).
         if (currentLeafTex !== null) {
           currentLeafTex.dispose();
           currentLeafTex = null;
+        }
+        if (currentLeafNormalTex !== null) {
+          currentLeafNormalTex.dispose();
+          currentLeafNormalTex = null;
         }
 
         const texData = makeLeafClusterTexture({
@@ -779,15 +799,26 @@ export function createViewer(canvas) {
           leafTip:       resolved.leafTip       ?? 0.4,
           leafSerration: resolved.leafSerration ?? 0.0,
           leafLobing:    resolved.leafLobing    ?? 0.0,
-          needleLeaf:    resolved.needleLeaf    ?? 0,
-          frondLeaf:     resolved.frondLeaf     ?? 0,
+          leafSkew:      resolved.leafSkew      ?? 0.5,
+          leafDivision:  resolved.leafDivision  ?? 0,
+          frondFan:      resolved.frondFan      ?? 0,
+          leafMode:      _leafMode,
         });
         if (texData !== null) {
           const tex = new THREE.CanvasTexture(texData.source);
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.needsUpdate = true;
           currentLeafTex = tex;
-          leaves.setTexture(tex);
+
+          // Normal map derived from the same sprite (veins/midrib relief).
+          let normalTex = null;
+          if (texData.normal) {
+            normalTex = new THREE.CanvasTexture(texData.normal);
+            normalTex.colorSpace = THREE.NoColorSpace;
+            normalTex.needsUpdate = true;
+            currentLeafNormalTex = normalTex;
+          }
+          leaves.setTexture(tex, normalTex);
         }
 
         // Leaf→bone join (Task 5a):
@@ -810,7 +841,14 @@ export function createViewer(canvas) {
           });
         }
 
-        leaves.update(foliageForUpdate);
+        // SINGLE-LEAF mode: fan each broadleaf CLUMP anchor into individual
+        // single-leaf cards (render-only — generation/SoA above are untouched;
+        // frond/needle/spiny canopies pass through unchanged). CLUSTER mode keeps
+        // one multi-leaf card per anchor (no expansion) — far fewer instances.
+        const leafSet = _leafMode === 'single'
+          ? expandClumpsToLeaves(foliageForUpdate, resolved.genome)
+          : foliageForUpdate;
+        leaves.update(leafSet);
         leaves.mesh.castShadow = true;
         leaves.mesh.receiveShadow = true;
 
@@ -930,6 +968,10 @@ export function createViewer(canvas) {
         currentLeafTex.dispose();
         currentLeafTex = null;
       }
+      if (currentLeafNormalTex !== null) {
+        currentLeafNormalTex.dispose();
+        currentLeafNormalTex = null;
+      }
       if (boneTex !== null) {
         boneTex.dispose();
         boneTex = null;
@@ -1012,6 +1054,35 @@ export function createViewer(canvas) {
     },
 
     /**
+     * setLeafBend(amount)
+     *
+     * Global per-leaf gravity-droop strength (0 = flat cards, higher = more
+     * downward curve). Forwards to the leaf mesh, which updates the bend uniform
+     * on both its lit and shadow-depth materials.
+     *
+     * @param {number} amount
+     */
+    setLeafBend(amount) {
+      if (typeof leaves.setLeafBend === 'function') leaves.setLeafBend(amount);
+    },
+
+    /**
+     * setLeafMode(mode)
+     *
+     * 'single' = one leaf per card (clumps fanned out); 'cluster' = a multi-leaf
+     * sprig per card (cheaper). Stores the mode; the caller must re-render
+     * (setPlant) for it to take effect — both the leaf sprite and whether clump
+     * anchors are expanded are decided in setPlant from this flag.
+     *
+     * @param {'single'|'cluster'} mode
+     */
+    setLeafMode(mode) {
+      _leafMode = (mode === 'cluster') ? 'cluster' : 'single';
+    },
+
+    getLeafMode() { return _leafMode; },
+
+    /**
      * setRootsRevealed(revealed)
      *
      * Fades the ground plane so the underground root system is visible, and
@@ -1044,6 +1115,35 @@ export function createViewer(canvas) {
       const fit = computeFitFromBounds(effectiveBounds);
       target = fit.center.clone();
       radius = fit.fitRadius;
+    },
+
+    /**
+     * setFoliageVisible(visible)
+     *
+     * Show/hide the canopy InstancedMesh in the main hero scene — the
+     * "structure only" inspector toggle (bark + branches + twigs, no leaves).
+     * Pure visibility flip on the existing mesh: zero geometry rebuild, zero
+     * rng, zero per-frame cost, and (because Object3D.visible=false also skips
+     * the shadow pass) no leaf shadows either. Composes with render-mode/roots.
+     *
+     * @param {boolean} visible
+     */
+    setFoliageVisible(visible) {
+      leaves.mesh.visible = visible;
+    },
+
+    /**
+     * setStructureVisible(visible)
+     *
+     * Show/hide the branch/trunk/root tube mesh in the main hero scene — the
+     * "foliage only" inspector toggle (canopy cards alone). Hiding the mesh
+     * (visible=false) also removes its shadow contribution, so the canopy is not
+     * shadowed by an invisible trunk. Pure visibility flip — no rebuild, no rng.
+     *
+     * @param {boolean} visible
+     */
+    setStructureVisible(visible) {
+      branchMesh.visible = visible;
     },
   };
 }

@@ -467,6 +467,11 @@ export function buildBranchGeometry(graph, opts = {}) {
   // New: per-vertex bone skin data.
   const boneIndexAttr    = new Float32Array(totalV);
   const boneFractionAttr = new Float32Array(totalV);
+  // New: per-vertex LOCAL TUBE RADIUS (world units) — the true ring radius, baked so the
+  // bark shader can scale its feature size to actual thickness. (The old shader proxy
+  // length(vObjPos.xz) measured distance from the world Y-axis, which is wrong on any
+  // leaning/offset trunk — it varied the texture frequency wildly around the trunk.)
+  const radii = new Float32Array(totalV);
 
   // Per-node AO — deterministic, geometry-only (no rng):
   //   - Inner / thick nodes (low branchLevel, large radius) are more occluded.
@@ -673,7 +678,7 @@ export function buildBranchGeometry(graph, opts = {}) {
   // boneIdx: which wind-bone (chain index) this vertex belongs to.
   // boneFrac: normalized arc position along the chain [0=pivot, 1=chain end].
   // -------------------------------------------------------------------------
-  function writeVertex(px, py, pz, nx, ny, nz, u, v, aoVal, windWeightVal, boneIdx, boneFrac) {
+  function writeVertex(px, py, pz, nx, ny, nz, u, v, aoVal, windWeightVal, boneIdx, boneFrac, radiusVal) {
     const vi = vCursor;
     positions[vi*3]   = px;
     positions[vi*3+1] = py;
@@ -687,6 +692,7 @@ export function buildBranchGeometry(graph, opts = {}) {
     windWeight[vi] = windWeightVal;
     boneIndexAttr[vi]    = boneIdx;
     boneFractionAttr[vi] = boneFrac;
+    radii[vi]      = radiusVal || 0;
     // Expand bounds
     if (px < bMinX) bMinX = px; if (px > bMaxX) bMaxX = px;
     if (py < bMinY) bMinY = py; if (py > bMaxY) bMaxY = py;
@@ -733,7 +739,7 @@ export function buildBranchGeometry(graph, opts = {}) {
       }
 
       const uCoord = j / segs;
-      writeVertex(px, py, pz, nx, ny, nz, uCoord, arcLen, aoVal, windWeightVal, boneIdx, boneFrac);
+      writeVertex(px, py, pz, nx, ny, nz, uCoord, arcLen, aoVal, windWeightVal, boneIdx, boneFrac, r);
     }
     return firstVert;
   }
@@ -859,7 +865,7 @@ export function buildBranchGeometry(graph, opts = {}) {
       if (isTip) {
         // Apex only; boneFraction=0 (single node, at pivot).
         writeVertex(node.pos[0], node.pos[1], node.pos[2],
-                    0, 1, 0, 0, 0, singleNodeAO, singleNodeWW, ci, 0);
+                    0, 1, 0, 0, 0, singleNodeAO, singleNodeWW, ci, 0, r);
       } else {
         // One ring, no triangles; boneFraction=0.
         emitRing(node.pos, r, frameU, frameV, segs, 0, singleNodeAO, singleNodeWW, ci, 0);
@@ -945,7 +951,8 @@ export function buildBranchGeometry(graph, opts = {}) {
       const apexVert = writeVertex(
         tipNode.pos[0], tipNode.pos[1], tipNode.pos[2],
         apexNormal[0], apexNormal[1], apexNormal[2],
-        0.5, tipArcLen, nodeAO[chain[N-1]], nodeWindWeight[chain[N-1]], ci, tipBoneFrac
+        0.5, tipArcLen, nodeAO[chain[N-1]], nodeWindWeight[chain[N-1]], ci, tipBoneFrac,
+        Math.max(tipNode.radius || 0, minRadius)
       );
 
       // Fan from last ring to apex.
@@ -982,6 +989,7 @@ export function buildBranchGeometry(graph, opts = {}) {
     uvs:        uvs.subarray(0, vCursor * 2),
     ao:         ao.subarray(0, vCursor),
     windWeight: windWeight.subarray(0, vCursor),
+    radii:      radii.subarray(0, vCursor),
     indices:    indices.subarray(0, iCursor * 3),
     vertexCount:   vCursor,
     triangleCount: iCursor,
@@ -1006,6 +1014,7 @@ function _emptyResult() {
     uvs:           new Float32Array(0),
     ao:            new Float32Array(0),
     windWeight:    new Float32Array(0),
+    radii:         new Float32Array(0),
     indices:       new Uint32Array(0),
     vertexCount:   0,
     triangleCount: 0,

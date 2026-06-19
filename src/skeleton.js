@@ -105,6 +105,8 @@
 //   exist simultaneously — raising MAX_BONES would directly buy more terminal twigs.
 // =============================================================================
 
+import { computeSizeFactor, deriveTraits } from './allometry.js';
+
 // ---------------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------------
@@ -396,19 +398,27 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   // Defensive reads for new genes — identity/no-op at 0.
   const stemSpread = genome.stemSpread ?? 0; // [0,1] — basal footprint radius for multi-stem shrubs
   const rosette    = genome.rosette    ?? 0; // [0,1] — apical whorl frond count (fern/palm crown)
+  // crownStart [0,1]: where the crown's primary branches begin along the trunk.
+  // 1.0 = IDENTITY — branches fork only from the trunk TOP (peak), as before (palm).
+  // <1.0 = ALSO emit primary branches from trunk nodes down to crownStart·H, so the
+  // crown starts lower (birch / most broadleaves). Non-whorl path only (conifers use
+  // the whorl tier startFrac). Gated so 1.0 draws zero extra rng → byte-identical.
+  const crownStart = genome.crownStart ?? 1.0;
 
   // ---------------------------------------------------------------------------
-  // trunkHeightFactor: piecewise mapping so f(0.5) = exactly 1.0 (identity).
-  //   [0,   0.5]: f(t) = 0.45 + t * 1.10                → f(0)=0.45, f(0.5)=1.00 (unchanged)
-  //   [0.5, 1.0]: f(t) = 10^(2*(t-0.5))  (exponential)  → f(0.5)=1.00, f(1)=10.0
-  // The upper half is exponential so the slider tops out at ~10× height while the
-  // identity point (0.5 → 1.0×) is bit-exact (10^0 === 1). Monotonic on both halves.
-  // Multiplied onto both TRUNK_HEIGHT and BASE_BRANCH_LENGTH so the whole plant
-  // scales uniformly in height. No rng draws consumed; no genome draw shifted.
+  // trunkHeightFactor: the master vertical-stature multiplier. Single source of
+  // truth is computeSizeFactor (allometry.js): piecewise, f(0.5)=exactly 1.0
+  // (bit-exact identity), up to ~10× at trunkHeight=1. Multiplied onto TRUNK_HEIGHT
+  // and BASE_BRANCH_LENGTH so the whole plant scales uniformly in height.
+  //
+  // ALLOMETRY (allometry.js deriveTraits): the same size factor also drives derived
+  // laws below — branch-recursion depth and whorl tier count grow with stature so a
+  // taller plant gains branch generations / tiers instead of merely stretching. All
+  // are identity (0 / ×1) at sizeFactor=1, so default-stature plants are unchanged.
+  // No rng draws consumed; no genome draw shifted.
   // ---------------------------------------------------------------------------
-  const trunkHeightFactor = trunkHeight <= 0.5
-    ? 0.45 + trunkHeight * 1.10
-    : Math.pow(10, 2 * (trunkHeight - 0.5));
+  const trunkHeightFactor = computeSizeFactor(trunkHeight);
+  const traits = deriveTraits(genome);
 
   // -------------------------------------------------------------------------
   // Derive integer structural parameters from continuous genes.
@@ -437,8 +447,18 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   //   Mapping changed from *4 → *7 so high branchiness reaches 6–7 levels,
   //   producing fine terminal twigs (the old *4 gave at most 4 levels).
   const fractDepth = branchiness * 7;
-  const maxDepth   = Math.floor(fractDepth);
-  const depthFrac  = fractDepth - maxDepth; // ∈ [0,1): crossfade weight at deepest level
+  const baseMaxDepth = Math.floor(fractDepth);
+  const depthFrac  = fractDepth - baseMaxDepth; // ∈ [0,1): crossfade weight at deepest level
+  // ALLOMETRY: a taller plant gains branch generations; a much shorter one sheds
+  // them (sapling few orders ↔ old tree many). branchOrderBonus is 0 at default
+  // stature (and for any near-default height it rounds to 0), so default presets
+  // keep their exact hierarchy; the bone budget still caps the real depth reached.
+  // GATED on baseMaxDepth > 0: a fundamentally UNBRANCHED plant (branchiness→0, e.g.
+  // a palm/grass column) must stay unbranched no matter how tall — size extends an
+  // existing branching program, it never invents one from nothing.
+  const maxDepth = baseMaxDepth > 0
+    ? Math.max(1, baseMaxDepth + (traits.branchOrderBonus || 0))
+    : 0;
 
   // Fractional children: branchFactorN ∈ [0,1] → children ∈ [1,4]
   const fractChildren  = 1 + branchFactorN * 3;
@@ -545,6 +565,7 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   }
 
   const allTrunkTops = []; // { idx: nodeIdx, weight: radiusScale }
+  const allTrunkChains = []; // { chain: nodeIdx[], weight } — full trunk node chains (for crownStart)
 
   // -------------------------------------------------------------------------
   // MULTI-STEM POSITIONING: stemSpread controls basal footprint.
@@ -563,6 +584,7 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
     // Single stem: center position, no azimuth divergence, no footprint spread.
     const ti = buildTrunk([0, 0, 0], 1.0, 0);
     allTrunkTops.push({ idx: ti[ti.length - 1], weight: 1.0 });
+    allTrunkChains.push({ chain: ti, weight: 1.0 });
   } else {
     for (let s = 0; s < totalStems; s++) {
       const az = stemAzimuths[s];
@@ -574,6 +596,7 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       const basePos = [Math.cos(az) * R, 0, Math.sin(az) * R];
       const ti = buildTrunk(basePos, weight, az);
       allTrunkTops.push({ idx: ti[ti.length - 1], weight });
+      allTrunkChains.push({ chain: ti, weight });
     }
   }
 
@@ -644,10 +667,10 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   // ---------------------------------------------------------------------------
   const WHORL_MAX_TIERS          = 9;    // maximum number of tiers at whorl=1
   const WHORL_BRANCHES_PER_TIER  = 7;    // branches emitted per tier
-  const WHORL_START_FRAC_MAX     = 0.55; // at whorl=1 the bare trunk starts at 55% height
+  const WHORL_START_FRAC_MAX     = 0.65; // at whorl=1 the bare lower trunk is the bottom 65% (clean pine-like bole)
   const WHORL_TRUNK_END_FRAC     = 0.95; // upper bound for tier placement
-  const WHORL_BASE_LEN_FRAC      = 0.40; // base tier branch length as fraction of trunk span
-  const WHORL_TOP_LEN_FRAC       = 0.10; // top tier branch length as fraction of trunk span
+  const WHORL_BASE_LEN_FRAC      = 0.30; // base tier branch length as fraction of trunk span (narrower cone)
+  const WHORL_TOP_LEN_FRAC       = 0.07; // top tier branch length as fraction of trunk span
   const INTER_TIER_OFFSET        = Math.PI / WHORL_BRANCHES_PER_TIER; // per-tier azimuth rotation offset
   const WHORL_CROWN_ANGLE        = 0.25; // rad from vertical near crown (upswept)
   const WHORL_BASE_ANGLE         = 1.15; // rad from vertical near base (near-horizontal / slight droop)
@@ -657,6 +680,14 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   const whorl = genome.whorl ?? 0;
 
   if (whorl > 0 && allTrunkTops.length > 0) {
+    // Each tier's BFS continuations are bucketed by tier (tierBuckets[ti]) instead of
+    // enqueued directly, so BFS ORDER can be controlled below. Plain FIFO BFS expands
+    // whichever tier is enqueued first and, once the bone budget is spent, starves the
+    // rest — which left either the bottom (was) or the top (naive reverse) of the
+    // conifer bald. Round-robin enqueue (below) spreads the budget evenly across ALL
+    // tiers so the whole cone develops, with a mild apex-first bias for the spire.
+    const tierBuckets = [];
+
     // ----- Collect trunk chain from dominant (first) stem in ascending-Y order -----
     const dominantTrunkTopIdx = allTrunkTops[0].idx;
     const trunkChain = []; // { nodeIdx, y }
@@ -692,7 +723,16 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       // At whorl→0+: tierCountFloat→0+, fullTiers=0, whorlTierFrac→0+ → single partial tier
       //              with branches at ~0 radius → invisible → NO pop at the 0-boundary.
       // At whorl=1:  tierCountFloat=9, fullTiers=9, whorlTierFrac=0 → 9 full tiers, no partial.
-      const tierCountFloat = whorl * WHORL_MAX_TIERS;
+      //
+      // ALLOMETRY: tier count scales with stature (traits.tierCountScale, 1.0 at
+      // default height) so a tall whorled stem stacks MORE tiers at ~constant spacing
+      // rather than stretching a fixed count apart. Capped so it cannot explode; the
+      // bone budget caps the real count too. Identity (×1) at sizeFactor=1.
+      const WHORL_TIER_HARD_MAX = 18;
+      const tierCountFloat = Math.min(
+        WHORL_TIER_HARD_MAX,
+        whorl * WHORL_MAX_TIERS * traits.tierCountScale
+      );
       const fullTiers      = Math.floor(tierCountFloat);
       const whorlTierFrac  = tierCountFloat - fullTiers;
 
@@ -816,7 +856,8 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
           const tierTailIdx = nodes.length - 1;
           if (tierTailIdx !== snapIdx) {
             const tierFinalDir = chainNodes[chainNodes.length - 1].dir;
-            queue.push({
+            if (!tierBuckets[ti]) tierBuckets[ti] = [];
+            tierBuckets[ti].push({
               nodeIdx: tierTailIdx,
               level: 1,
               dir: tierFinalDir,
@@ -830,17 +871,40 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       }
     }
 
-    // Leader: always enqueue the dominant trunk top so the spire continues to climb.
+    // BFS ORDER (budget priority): enqueue the apex/leader FIRST so the spire and
+    // upper crown develop before the bone budget is spent, then the tier sub-branches
+    // from the TOP tier DOWN. If the budget then runs out it starves the LOWEST tiers
+    // (whose primary branches are already built and still get foliated) instead of the
+    // apex — fixing the "dense bottom whorl, bald top" conifer look.
+    // CONIFER_LEADER_FRAC: a conifer's crown IS the tiers along the trunk, so the
+    // leader (trunk continuation above the top tier) must be a SHORT apex spike — not
+    // the full-trunk-height branch a broadleaf uses to build a crown atop its trunk.
+    // Without this the leader shoots a tall bare spire ~3× the tier zone, cramming the
+    // whole foliated crown into the bottom of the silhouette (the "bald top" report).
+    const CONIFER_LEADER_FRAC = 0.22;
     for (const { idx: topIdx, weight } of allTrunkTops) {
       queue.push({
         nodeIdx: topIdx,
         level: 0,
         dir: [0, 1, 0],
-        len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor,
+        len: BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor * CONIFER_LEADER_FRAC,
         attachPos: [...nodes[topIdx].pos],
         radiusScale: weight,
         childIndex: 0
       });
+    }
+    // Round-robin across tiers: enqueue the k-th branch of every tier before the
+    // (k+1)-th, walking tiers TOP→bottom within each round. This shares the bone
+    // budget evenly across all tiers (no tier is fully expanded before the next is
+    // touched), so the whole cone fills out; the top→bottom order within a round gives
+    // the apex a slight head start for a clean spire.
+    let maxBucket = 0;
+    for (const b of tierBuckets) if (b && b.length > maxBucket) maxBucket = b.length;
+    for (let k = 0; k < maxBucket; k++) {
+      for (let ti = tierBuckets.length - 1; ti >= 0; ti--) {
+        const bucket = tierBuckets[ti];
+        if (bucket && k < bucket.length) queue.push(bucket[k]);
+      }
     }
   } else {
     // whorl === 0: byte-identical path — enqueue trunk tops exactly as before.
@@ -857,6 +921,43 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
         radiusScale: weight,
         childIndex: 0   // deterministic curvature key: which child of its parent is this?
       });
+    }
+
+    // crownStart < 1: ALSO emit primary crown branches from trunk nodes down to
+    // crownStart·H (the crown starts lower, not just at the peak). Gated here so
+    // crownStart=1 appends nothing and the whole path stays byte-identical. No rng
+    // draws — azimuths are a deterministic golden-angle spiral up the trunk.
+    if (crownStart < 1) {
+      const CROWN_GOLDEN = Math.PI * (3 - Math.sqrt(5));      // ≈137.5° phyllotaxis
+      const primaryLen = BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor;
+      let lbIndex = 0;
+      for (let si = 0; si < allTrunkChains.length; si++) {
+        const { chain, weight } = allTrunkChains[si];
+        const n = chain.length;
+        if (n < 3) continue;
+        const baseAz = stemAzimuths[si] !== undefined ? stemAzimuths[si] : 0;
+        // Skip the base (k=0) and the top (k=n-1, already a trunk-top primary).
+        for (let k = 1; k < n - 1; k++) {
+          const t = k / (n - 1);
+          if (t < crownStart) continue;
+          const az = baseAz + lbIndex * CROWN_GOLDEN;
+          lbIndex++;
+          // Outward + upward primary direction (the recursion spreads laterals from it).
+          const up = 0.55;
+          const s  = Math.sqrt(Math.max(0, 1 - up * up));
+          const dir = normalize([Math.cos(az) * s, up, Math.sin(az) * s]);
+          queue.push({
+            nodeIdx: chain[k],
+            level: 0,
+            dir,
+            // Longer toward the base, shorter toward the apex — a natural crown taper.
+            len: primaryLen * (0.55 + 0.35 * (1 - t)),
+            attachPos: [...nodes[chain[k]].pos],
+            radiusScale: weight,
+            childIndex: k,
+          });
+        }
+      }
     }
   }
 
@@ -991,9 +1092,16 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       // At the trunk top (level==0) no boost is applied — trunk clamping already
       // handles the leader and we don't want to open up laterals there either
       // (they would look like co-equal Y-forks at the base).
+      // APICAL DOMINANCE COUPLING: a strong leader (high apicalBias) doesn't only grow
+      // longer (handled at the leader above) — it SUPPRESSES laterals, shortening them
+      // AND pulling them more upright (excurrent / conifer-like form). This is the
+      // missing other half of apical dominance the audit flagged. At apicalBias=0 both
+      // factors are 1.0 (identity, no suppression). No rng draws added; bone count
+      // unchanged (laterals are still built, just shorter/steeper).
+      const apicalSuppress = 1 - apicalBias * 0.45;        // lateral length → 55% at full apical
       const spreadBoost = level > 0 ? LATERAL_SPREAD_BOOST : 0;
-      const lateralBranchAngle = branchAngle + spreadBoost + draws[1].drawB;
-      const lateralLen = childLen * (1 + draws[1].drawA);
+      const lateralBranchAngle = (branchAngle + spreadBoost) * (1 - apicalBias * 0.40) + draws[1].drawB;
+      const lateralLen = childLen * (1 + draws[1].drawA) * apicalSuppress;
       const lateralBaseDir = normalize([
         dir[0] * Math.cos(lateralBranchAngle) + perp[0] * Math.sin(lateralBranchAngle),
         dir[1] * Math.cos(lateralBranchAngle) + perp[1] * Math.sin(lateralBranchAngle),
@@ -1096,7 +1204,12 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
   // the trunk-top node (which was placed during the BFS-predecessor trunk build).
   // -------------------------------------------------------------------------
   if (rosette > 0 && allTrunkTops.length > 0) {
-    const N = Math.max(1, Math.round(rosette * ROSETTE_MAX));
+    // Frond count via the fractional-crossfade idiom: the marginal frond grows in
+    // from zero LENGTH as rosette rises, instead of Math.round() stepping the count.
+    const fractFronds = rosette * ROSETTE_MAX;   // 0..ROSETTE_MAX
+    const fullFronds  = Math.floor(fractFronds);
+    const frondFrac   = fractFronds - fullFronds;
+    const N           = Math.max(1, fullFronds + (frondFrac > 0 ? 1 : 0));
     // Use the first (dominant) trunk top as the attachment point.
     const trunkTopIdx = allTrunkTops[0].idx;
     const trunkTopNode = nodes[trunkTopIdx];
@@ -1104,12 +1217,30 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
 
     // Frond length: one lengthRatio step below the primary branch length.
     const frondLen = BASE_BRANCH_LENGTH * TRUNK_HEIGHT * trunkHeightFactor * lengthRatio;
-    const frondSegLen = frondLen / intNodes;
+
+    // FROND_SEGMENTS: fronds use MORE internodes than the segmentation-derived
+    // intNodes (which is 2 for the palm) so they ARCH smoothly. A single interior
+    // joint reads as a rigid elbow, and a whole crown of identical elbows at one
+    // emergence angle is the "candelabra / menorah" look. The frond chain consumes
+    // NO rng draws (markTerminal's single draw per frond is unchanged), so the
+    // rosette>0 rng schedule — and thus palm/fern/banana determinism — is intact.
+    const FROND_SEGMENTS = Math.max(intNodes, 5);
+    const frondSegLen = frondLen / FROND_SEGMENTS;
 
     // Radius for rosette fronds: same taper as level-1 branches.
     const frondRadius = BRANCH_BASE_RADIUS * Math.pow(TAPER_BASE, 1);
 
-    // Build N fronds evenly spaced in azimuth.
+    // Crown shape: a real palm/fern crown is a FOUNTAIN of arching fronds — emerging
+    // across a range of elevations and curving downward over their length — not a
+    // uniform cone of straight spokes. Emergence angle and total arch are spread
+    // per-frond by a deterministic hash (decorrelated from azimuth so there's no
+    // seam), giving a full, natural crown that also varies per individual (reroll).
+    const FROND_POLAR_MIN = 0.35;  // ~20° from vertical — central/young upright fronds
+    const FROND_POLAR_MAX = 1.25;  // ~72° — outer fronds emerge nearly horizontally
+    const FROND_ARCH_MIN  = 0.70;  // gentle total downward arc (rad) for upright fronds
+    const FROND_ARCH_MAX  = 1.90;  // strong arc → outer fronds arch over and droop below the crown
+
+    // Build N fronds evenly spaced in azimuth (guarantees full-circle coverage).
     for (let fi = 0; fi < N; fi++) {
       // Stop if bone budget is exhausted.
       if (boneCounter >= SOFT_CEILING) break;
@@ -1117,27 +1248,33 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
       // Evenly distributed azimuth: 2π * fi / N (no rng draw — deterministic).
       const az = (Math.PI * 2 * fi) / N;
 
-      // Frond direction: angled outward from vertical (branchAngle) at azimuth az.
-      // Use a fixed spread angle (branchAngle gene) for a natural whorl.
-      const frondAngle = branchAngle; // radians from vertical
+      // Deterministic per-frond elevation factor in [0,1], decorrelated from azimuth
+      // so adjacent fronds don't form a visible spiral seam (no rng draw consumed).
+      const elevHash   = 0.5 + 0.5 * Math.sin(structuralSeed * 4.7 + fi * 1.873);
+      const frondPolar = lerp(FROND_POLAR_MIN, FROND_POLAR_MAX, elevHash);
+      const frondArch  = lerp(FROND_ARCH_MIN,  FROND_ARCH_MAX,  elevHash);
+
+      // Frond emergence direction: outward from vertical at frondPolar, azimuth az.
       const frondDir = normalize([
-        Math.sin(frondAngle) * Math.cos(az),
-        Math.cos(frondAngle),
-        Math.sin(frondAngle) * Math.sin(az)
+        Math.sin(frondPolar) * Math.cos(az),
+        Math.cos(frondPolar),
+        Math.sin(frondPolar) * Math.sin(az)
       ]);
 
-      // Deterministic curvature for this frond — no rng draws.
-      const arcAngle = computeCurvatureArc(structuralSeed, fi, 1);
-      const arcAxis  = computeCurvatureAxis(frondDir, structuralSeed, fi, 1);
-      const droopPerSeg = 0.04;
-      // No wiggle for rosette fronds (no rng draws to reuse here — keep zero).
-      const wigglePerSeg = 0;
-      const wiggleAxis   = perpTo(frondDir);
+      // Arch axis: horizontal, perpendicular to the outward azimuth, oriented so a
+      // POSITIVE arc bends the frond DOWNWARD (increasing polar) over its length —
+      // the defining arching-frond silhouette. droopPerSeg stays 0 because the arc
+      // already provides a clean, smooth downward curve in the frond's own plane.
+      const archAxis = normalize([Math.sin(az), 0, -Math.cos(az)]);
+
+      // Crossfade frond (the +1 marginal one) grows in from near-zero LENGTH (via the
+      // chain radiusScale) and weight (foliage scales its clusters down) as rosette rises.
+      const frondWeight = (fi === fullFronds && frondFrac > 0) ? frondFrac : 1.0;
 
       const chainNodes = buildCurvedChain(
-        trunkTopPos, frondDir, frondSegLen, intNodes,
-        arcAngle, arcAxis, droopPerSeg, wigglePerSeg, wiggleAxis,
-        1.0, 1
+        trunkTopPos, frondDir, frondSegLen, FROND_SEGMENTS,
+        frondArch, archAxis, 0, 0, perpTo(frondDir),
+        frondWeight, 1
       );
 
       let prevIdx = trunkTopIdx;
@@ -1147,7 +1284,7 @@ export function buildSkeleton(genome, rng, jitterAmp = 1.0) {
         nodes.push({
           pos: cn.pos,
           radius: frondRadius,
-          weight: 1.0,
+          weight: frondWeight,
           branchLevel: 1,
           parentIdx: prevIdx,
           isWoody: true

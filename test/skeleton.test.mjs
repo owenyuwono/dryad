@@ -615,11 +615,12 @@ test('TRUNK HEIGHT FACTOR: trunkHeight=0.5 → factor exactly 1.0 (byte-identica
 
 test('TRUNK HEIGHT FACTOR: trunkHeight=1.0 → tree ~10× taller than at 0.5', () => {
   // factor(1.0)=10.0, factor(0.5)=1.0 → max canopy Y ratio should be ~10×.
-  // Topology is identical between the two (same seed, same genome bar trunkHeight),
-  // so the ratio of max-Y isolates the height factor.
+  // Use branchiness=0 (unbranched column) so the height ratio isolates the pure
+  // trunkHeightFactor — with branches, the size→branch-order allometry adds
+  // generations at trunkHeight=1 and the canopy would exceed a flat 10× scaling.
   for (let seed = 0; seed < 8; seed++) {
-    const g05 = makeGenome({ trunkHeight: 0.5, branchiness: 0.5 });
-    const g10 = makeGenome({ trunkHeight: 1.0, branchiness: 0.5 });
+    const g05 = makeGenome({ trunkHeight: 0.5, branchiness: 0.0 });
+    const g10 = makeGenome({ trunkHeight: 1.0, branchiness: 0.0 });
     const maxY05 = Math.max(...buildSkeleton(g05, mulberry32(seed)).nodes.map(n => n.pos[1]));
     const maxY10 = Math.max(...buildSkeleton(g10, mulberry32(seed)).nodes.map(n => n.pos[1]));
     assert.ok(maxY05 > 0, `seed=${seed}: degenerate maxY05=${maxY05}`);

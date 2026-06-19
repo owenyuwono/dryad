@@ -150,16 +150,32 @@ export function createRenderModeController({ branchMesh, leafMesh, barkCtl, leaf
   //   Supports InstancedMesh natively.
   // ---------------------------------------------------------------------------
   function applyNormals() {
-    if (normalBranchMat === null) {
-      normalBranchMat = new THREE.MeshNormalMaterial();
-    }
+    // LEAF: MeshNormalMaterial supports normalMap, so feed it the leaf normal map
+    // (baked from the sprite). The debug view then shows the PERTURBED normals —
+    // the vein/midrib relief — instead of one flat colour per card.
+    const leafNorm  = realLeafMaterial ? realLeafMaterial.normalMap  : null;
+    const leafScale = (realLeafMaterial && realLeafMaterial.normalScale) ? realLeafMaterial.normalScale : null;
     if (normalLeafMat === null) {
-      normalLeafMat = new THREE.MeshNormalMaterial({
-        side: THREE.DoubleSide,
-      });
+      normalLeafMat = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
     }
-    branchMesh.material = normalBranchMat;
-    leafMesh.material   = normalLeafMat;
+    if (normalLeafMat.normalMap !== leafNorm) {
+      normalLeafMat.normalMap = leafNorm;
+      normalLeafMat.needsUpdate = true;
+    }
+    if (leafScale && normalLeafMat.normalScale) normalLeafMat.normalScale.copy(leafScale);
+
+    // BRANCH: bark relief is procedural (in the lit material's shader), so a stock
+    // MeshNormalMaterial can't show it. Use the REAL bark material with its debug-
+    // normals flag on, so the debug view renders the bark's perturbed normal (furrows
+    // + cracks) directly.
+    if (barkCtl && typeof barkCtl.setDebugNormals === 'function') {
+      barkCtl.setDebugNormals(true);
+      branchMesh.material = barkCtl.material;
+    } else {
+      if (normalBranchMat === null) normalBranchMat = new THREE.MeshNormalMaterial();
+      branchMesh.material = normalBranchMat;
+    }
+    leafMesh.material = normalLeafMat;
   }
 
   // ---------------------------------------------------------------------------
@@ -278,6 +294,12 @@ if (gl_FragColor.a < alphaTest) discard;
     cacheRealMaterials();
 
     currentMode = mode;
+
+    // The bark debug-normals flag is only on in 'normals' mode; clear it for every
+    // other mode so the lit bark shader renders colour, not its normal-as-colour.
+    if (mode !== 'normals' && barkCtl && typeof barkCtl.setDebugNormals === 'function') {
+      barkCtl.setDebugNormals(false);
+    }
 
     switch (mode) {
       case 'lit':

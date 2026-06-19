@@ -64,9 +64,17 @@ function makeFloraParent() {
     leafTip:          0.40,
     leafSerration:    0.00,
     leafLobing:       0.00,
-    // bark + weep genes (draws 36-38)
-    barkColor:        0.85,
-    barkPattern:      0.80,
+    leafSkew:         0.50,
+    // orthogonal bark axes + weep
+    barkHue:          0.85,
+    barkLightness:    0.30,
+    barkRelief:       0.85,
+    barkLenticels:    0.00,
+    barkScale:        0.50,
+    barkOrient:       0.70,
+    barkPlates:       0.45,
+    barkShed:         0.00,
+    barkUnderHue:     0.75,
     weep:             0.00,
     // trunkHeight (draw 39)
     trunkHeight:      0.50,
@@ -77,14 +85,13 @@ function makeFloraParent() {
     // new inert genes (draws 43–45)
     woodiness:        1.00,
     whorl:            0.00,
+    crownStart:       1.00,
     tipTuft:          0.00,
     // new inert genes (draws 46–48)
-    needleLeaf:       0.00,
-    leafScale:        1.00,
-    frondLeaf:        0.00,
+    leafDivision:     0.00,
+    frondFan:         0.00,  // 0 = pinnate/feather frond (identity)
     phototropism:     1.00,  // 1.0 = full phototropism (identity — draw 49)
     trunkTaper:       0.00,  // 0 = identity (draw 50)
-    trunkRings:       0.00,  // 0 = identity (no ring banding — draw 51)
     structuralSeed:   0xDEADBEEF,
     // root system tier (added Task 1 — required so genomeDistance is non-NaN)
     rootCount:        0.45,

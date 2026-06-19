@@ -4,6 +4,8 @@ import { buildSkeleton }      from '../src/skeleton.js';
 import { solveProportions }   from '../src/proportions.js';
 import {
   generateFoliage,
+  expandClumpsToLeaves,
+  LEAVES_PER_CLUMP,
   MAX_LEAVES,
   BARE_FRACTION,
   TIP_EXPONENT,
@@ -43,7 +45,7 @@ function makeBushyGenome(overrides = {}) {
     rigidity:         0.60,
     verticality:      0.50,
     ribbing:          0.05,
-    spininess:        0.05,
+    spininess:        0.00,   // bushy broadleaf — no spines (spine tests set this explicitly)
     branchAngle:      0.575,
     lengthRatio:      0.70,
     apicalBias:       0.50,
@@ -226,23 +228,24 @@ test('count strictly increases with appendageDensity (0.1 vs 0.9)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// TEST: count increases with leafDensity (0.5 vs 1.5)
+// TEST: count increases with appendageDensity at the widened high end (0.5 vs 1.5)
+// (appendageDensity is now the single density gene — former leafDensity folded in,
+//  range widened to [0,1.5].)
 // ---------------------------------------------------------------------------
 
-test('count strictly increases with leafDensity (0.5 vs 1.5)', () => {
+test('count strictly increases with appendageDensity (0.5 vs 1.5)', () => {
   // Use a sparser base so neither variant saturates MAX_LEAVES, leaving room for
-  // the leafDensity gene to control count. With the larger bone budget, the old
-  // bushy base produced 800 leaves at both densities (no headroom for the gene).
-  const base = { branchiness: 0.40, branchFactorN: 0.40, appendageDensity: 0.40, structuralSeed: 0xABCD1234 };
-  const low  = makeBushyGenome({ ...base, leafDensity: 0.5 });
-  const high = makeBushyGenome({ ...base, leafDensity: 1.5 });
+  // the density gene to control count.
+  const base = { branchiness: 0.40, branchFactorN: 0.40, structuralSeed: 0xABCD1234 };
+  const low  = makeBushyGenome({ ...base, appendageDensity: 0.5 });
+  const high = makeBushyGenome({ ...base, appendageDensity: 1.5 });
 
   const rLow  = generateFoliage(buildGraph(low),  low);
   const rHigh = generateFoliage(buildGraph(high), high);
 
   assert.ok(
     rHigh.count > rLow.count,
-    `leafDensity 1.5 (${rHigh.count}) should exceed 0.5 (${rLow.count})`
+    `appendageDensity 1.5 (${rHigh.count}) should exceed 0.5 (${rLow.count})`
   );
 });
 
@@ -498,38 +501,39 @@ test('different structuralSeed values produce different leaf arrays', () => {
 // TEST: CONTINUITY — leaf scale sum changes smoothly across count boundaries.
 // ---------------------------------------------------------------------------
 
-test('CONTINUITY: sweep branchFactorN — total leaf scale changes smoothly (no cliff)', () => {
-  // branchFactorN boundary at 2/3 ≈ 0.667: fractChildren goes 2.x→3.x.
-  // Before fix: a new crossfade lateral snapped in at FULL scale, causing a cliff.
-  // After fix: the crossfade lateral's leaves scale by node.weight≈0 and grow smoothly.
-  // We measure total leaf scale (sum of all scale[] values) as the metric.
+test('CONTINUITY: crossfade grows in by COUNT, not size — leaves stay full-size across a branchFactorN sweep', () => {
+  // The crossfade now grows a marginal lateral in by ADDING full-size leaves
+  // (count ∝ node.weight), NOT by shrinking each leaf's size toward zero. So
+  // across a branchFactorN sweep no leaf should ever shrink toward 0 (the old
+  // size-based crossfade is gone), and the canopy should gain leaves overall.
   const genome = makeBushyGenome({
     branchiness: 0.35,     // moderate depth so we have some branches but not too many
     tillering:   0.0,      // single stem — isolate branchFactorN effect
     structuralSeed: 0xBEEF1234,
   });
-  let prevTotalScale = null;
-  // Sweep 0.60→0.75, crossing the 2/3 boundary
+  let minScaleSeen = Infinity;
+  let firstCount = null, lastCount = null;
+  // Sweep 0.60→0.75, crossing the 2/3 children boundary.
   for (let fi = 0; fi <= 50; fi++) {
     const branchFactorN = 0.60 + fi * (0.15 / 50);
     const g = { ...genome, branchFactorN };
-    const graph = buildGraph(g);
-    const result = generateFoliage(graph, g);
-    let totalScale = 0;
-    for (let i = 0; i < result.count; i++) totalScale += result.scale[i];
-    if (prevTotalScale !== null) {
-      const delta = Math.abs(totalScale - prevTotalScale);
-      // A crossfade branch's leaves enter at near-zero scale, so delta stays small.
-      // Cap set to 20.0: the pre-fix cliff was ~164 leaf-widths snapping in at once;
-      // after the fix the crossfade entry is weight-ramped. With BASE_DENSITY=10 and
-      // LEAF_BASE=0.55, the max measured delta stays well below this cap.
-      assert.ok(
-        delta <= 20.0,
-        `foliage branchFactorN sweep: step ${fi} branchFactorN=${branchFactorN.toFixed(3)} totalScale=${totalScale.toFixed(4)} delta=${delta.toFixed(4)}`
-      );
+    const result = generateFoliage(buildGraph(g), g);
+    for (let i = 0; i < result.count; i++) {
+      if (result.scale[i] < minScaleSeen) minScaleSeen = result.scale[i];
     }
-    prevTotalScale = totalScale;
+    if (fi === 0) firstCount = result.count;
+    lastCount = result.count;
   }
+  // Leaf size is uniform — no leaf shrinks toward zero to "grow in".
+  assert.ok(
+    minScaleSeen > 0.3,
+    `leaves should stay full-size across the sweep, min scale was ${minScaleSeen.toFixed(3)}`
+  );
+  // Grow-in is by count: the canopy gains leaves as branchFactorN rises.
+  assert.ok(
+    lastCount >= firstCount,
+    `leaf count should grow across the branchFactorN sweep: ${firstCount} → ${lastCount}`
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -687,16 +691,13 @@ test('bare lower trunk: no clusters in proximal BARE_FRACTION of branchLevel-1 s
 // TEST: crossfade weight scaling — node.weight=0.5 halves cluster scale.
 // ---------------------------------------------------------------------------
 
-test('crossfade weight scales cluster scale proportionally', () => {
-  // Use a controlled fake graph where all weights are explicitly 1.0,
-  // so the graph1 baseline has known weight=1.0 at every node.
-  // Then graph2 overrides all non-root weights to 0.5.
-  // The rng sequence is identical for both (same structuralSeed), so
-  // cluster[0] comes from the same node with the same sizeJitter draw,
-  // and the scale ratio will be exactly 0.5.
+test('crossfade weight scales cluster COUNT, not size (leaf size is uniform)', () => {
+  // A thin / growing-in twig (node.weight < 1) now carries FEWER full-size leaves
+  // rather than smaller leaves. So at weight=0.5: leaf SIZE is unchanged (the first
+  // cluster's scale matches the weight=1 graph, since the rng/sizeJitter draw is the
+  // same), and the cluster COUNT is roughly halved.
   const genome = makeBushyGenome();
 
-  // Build a controlled fake graph with explicit weight=1.0 everywhere.
   const fakeGraph1 = {
     nodes: [
       { isRoot: true,  branchLevel: 0, parentIdx: -1, pos: [0, 0, 0], radius: 0.1,  isWoody: true,  isTerminal: false, weight: 1.0 },
@@ -704,8 +705,6 @@ test('crossfade weight scales cluster scale proportionally', () => {
       { isRoot: false, branchLevel: 3, parentIdx: 1,  pos: [1, 1, 0], radius: 0.05, isWoody: true,  isTerminal: true,  weight: 1.0 },
     ],
   };
-
-  // graph2: identical structure but all non-root weights at 0.5.
   const fakeGraph2 = {
     nodes: fakeGraph1.nodes.map(n => ({ ...n, weight: n.isRoot ? 1.0 : 0.5 })),
   };
@@ -713,12 +712,19 @@ test('crossfade weight scales cluster scale proportionally', () => {
   const r1 = generateFoliage(fakeGraph1, genome); // weight=1
   const r2 = generateFoliage(fakeGraph2, genome); // weight=0.5
 
-  // Scale at same slot must be exactly half (same rng sequence → same sizeJitter).
   assert.ok(r1.count > 0 && r2.count > 0, 'Need at least one cluster');
-  const ratio = r2.scale[0] / r1.scale[0];
+
+  // SIZE is weight-independent — first cluster's scale identical (same sizeJitter draw).
   assert.ok(
-    Math.abs(ratio - 0.5) < 0.01,
-    `Expected scale ratio 0.5, got ${ratio.toFixed(4)}`
+    Math.abs(r2.scale[0] - r1.scale[0]) < 1e-9,
+    `leaf size must be weight-independent: ${r1.scale[0]} vs ${r2.scale[0]}`
+  );
+
+  // DENSITY scales with weight — half-weight twig carries ~half the clusters.
+  const ratio = r2.count / r1.count;
+  assert.ok(
+    ratio > 0.4 && ratio < 0.65,
+    `Expected ~0.5 count ratio at weight 0.5, got ${ratio.toFixed(3)} (${r2.count}/${r1.count})`
   );
 });
 
@@ -2018,129 +2024,99 @@ test('SPINE: barrel cactus with spininess=0 is still byte-identical to no-spinin
 });
 
 // ---------------------------------------------------------------------------
-// LEAF-SCALE GENE TESTS
+// LEAF-SIZE GENE TEST (leafScale was removed — folded into the single leafSize gene)
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// TEST: leafScale=1.0 no-op — full SoA (all arrays + count) byte-identical to
-// genome without the leafScale field (via ?? 1.0 default).
-//
-// Regression guard: proves the identity default leaves the generation pipeline
-// byte-for-byte unchanged. Existing determinism tests stay green without edits.
-// ---------------------------------------------------------------------------
+// TEST: leafSize=2.4 doubles mean leaf card size vs leafSize=1.2, count unchanged.
+// (leafSize is now the single card-size multiplier — range widened to [0.6,4.0].)
+test('LEAF-SIZE: doubling leafSize doubles mean card scale, count unchanged', () => {
+  const genome1 = makeBushyGenome({ leafSize: 1.2 });
+  const genome2 = makeBushyGenome({ leafSize: 2.4 });
 
-test('LEAF-SCALE no-op: leafScale=1.0 SoA is byte-identical to genome without leafScale field', () => {
-  const genomeNoScale = makeBushyGenome();              // no leafScale field — defaults to 1.0
-  const genomeScale1  = makeBushyGenome({ leafScale: 1.0 }); // explicit 1.0
+  // Same graph so topology (and therefore cluster count) is identical.
+  const graph = buildGraph(genome1);
 
-  const graph1 = buildGraph(genomeNoScale);
-  const graph2 = buildGraph(genomeScale1);
+  const r1 = generateFoliage(graph, genome1);
+  const r2 = generateFoliage(graph, genome2);
 
-  const r1 = generateFoliage(graph1, genomeNoScale);
-  const r2 = generateFoliage(graph2, genomeScale1);
+  // count must be unchanged — leafSize only affects card size, not cluster count.
+  assert.strictEqual(r2.count, r1.count, 'leafSize must not change cluster count');
 
-  assert.strictEqual(r1.count, r2.count, 'leafScale=1.0 must not change count');
-
-  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
-    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
-    for (let i = 0; i < r1.count * stride; i++) {
-      assert.strictEqual(
-        r1[key][i],
-        r2[key][i],
-        `leafScale=1.0 no-op: ${key}[${i}] differs from no-leafScale baseline`
-      );
-    }
-  }
-});
-
-// ---------------------------------------------------------------------------
-// TEST: leafScale=2.0 doubles mean leaf card size vs leafScale=1.0.
-//
-// count must be unchanged (density is unaffected).
-// rng draw count must be unchanged: scale[] and rotation[] at each slot must
-// be exactly 2× and 1× (respectively) of the leafScale=1.0 values, proving
-// that position/rng ordering is preserved and only the post-multiply changed.
-// ---------------------------------------------------------------------------
-
-test('LEAF-SCALE: leafScale=2.0 doubles mean scale vs leafScale=1.0, count unchanged', () => {
-  const genomeScale1 = makeBushyGenome({ leafScale: 1.0 });
-  const genomeScale2 = makeBushyGenome({ leafScale: 2.0 });
-
-  // Use the same graph so topology (and therefore count) is identical.
-  const graph = buildGraph(genomeScale1);
-
-  const r1 = generateFoliage(graph, genomeScale1);
-  const r2 = generateFoliage(graph, genomeScale2);
-
-  // count must be unchanged — leafScale only affects card size, not cluster count.
-  assert.strictEqual(r2.count, r1.count, 'leafScale=2.0 must not change cluster count');
-
-  // Mean scale at leafScale=2.0 must be ~2× the leafScale=1.0 mean.
-  let sum1 = 0;
-  let sum2 = 0;
-  for (let i = 0; i < r1.count; i++) {
-    sum1 += r1.scale[i];
-    sum2 += r2.scale[i];
-  }
-  const mean1 = sum1 / r1.count;
-  const mean2 = sum2 / r2.count;
-
-  // Allow ±1% tolerance for floating-point accumulation.
-  const ratio = mean2 / mean1;
+  let sum1 = 0, sum2 = 0;
+  for (let i = 0; i < r1.count; i++) { sum1 += r1.scale[i]; sum2 += r2.scale[i]; }
+  const ratio = (sum2 / r2.count) / (sum1 / r1.count);
   assert.ok(
     Math.abs(ratio - 2.0) < 0.01,
-    `leafScale=2.0 mean scale ratio should be ~2.0, got ${ratio.toFixed(4)}`
+    `2.4/1.2 leafSize mean scale ratio should be ~2.0, got ${ratio.toFixed(4)}`
   );
 
-  // Prove rng draw count is unchanged: rotation[] and ageColor[] must be byte-identical.
-  //
-  // rotation[i] is the LAST rng draw in writeCluster (clusterRoll = (rng()-0.5)*0.8).
-  // If leafScale changed the number of rng draws consumed before it, rotation would
-  // shift to a different rng output. It must be identical to prove the draw sequence
-  // is the same length.
-  //
-  // Note: position[] legitimately differs because clusterScale feeds into radialPush
-  // and volJit (both use clusterScale as a multiplier), so bigger cards sit radially
-  // further from the branch axis — that is intentional, not a draw-count disturbance.
-  //
-  // ageColor[] is deterministic from branchLevel (no rng draw), so it is always identical.
+  // rng draw count unchanged: rotation[] (last per-cluster draw) must be byte-identical.
   for (let i = 0; i < r1.count; i++) {
-    assert.strictEqual(
-      r1.rotation[i],
-      r2.rotation[i],
-      `rotation[${i}] differs between leafScale=1.0 and leafScale=2.0 — rng draw count changed`
-    );
-    assert.strictEqual(
-      r1.ageColor[i],
-      r2.ageColor[i],
-      `ageColor[${i}] differs between leafScale=1.0 and leafScale=2.0`
-    );
+    assert.strictEqual(r1.rotation[i], r2.rotation[i],
+      `rotation[${i}] differs — leafSize must not change the rng draw count`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// TEST: leafScale determinism — same (genome, seed) twice → byte-identical SoA.
+// expandClumpsToLeaves — render-path single-leaf expansion (one leaf = one card)
 // ---------------------------------------------------------------------------
 
-test('LEAF-SCALE: determinism — same (genome, seed) twice is byte-identical', () => {
-  const genome = makeBushyGenome({ leafScale: 2.5, structuralSeed: 0xCAFE5CA1 });
+test('expandClumpsToLeaves: broadleaf clumps expand to LEAVES_PER_CLUMP single leaves each', () => {
+  const genome = makeBushyGenome({ structuralSeed: 7 });   // broadleaf: frondyness=0, spininess=0
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  const leaves = expandClumpsToLeaves(clumps, genome);
 
-  const graph1 = buildGraph(genome);
-  const graph2 = buildGraph(genome);
+  assert.strictEqual(leaves.count, clumps.count * LEAVES_PER_CLUMP,
+    `expected ${clumps.count}×${LEAVES_PER_CLUMP} leaves, got ${leaves.count}`);
 
-  const r1 = generateFoliage(graph1, genome);
-  const r2 = generateFoliage(graph2, genome);
+  // All emitted fields finite; orientation vectors ~unit; scale positive.
+  for (let i = 0; i < leaves.count; i++) {
+    const i3 = i * 3;
+    for (const v of [leaves.position[i3], leaves.position[i3+1], leaves.position[i3+2],
+                     leaves.normal[i3], leaves.tangent[i3]]) {
+      assert.ok(Number.isFinite(v), `non-finite at leaf ${i}`);
+    }
+    const tl = Math.hypot(leaves.tangent[i3], leaves.tangent[i3+1], leaves.tangent[i3+2]);
+    assert.ok(Math.abs(tl - 1) < 1e-3, `tangent not unit at ${i}: ${tl}`);
+    assert.ok(leaves.scale[i] > 0, `non-positive scale at ${i}`);
+  }
+});
 
-  assert.strictEqual(r1.count, r2.count, 'count must match');
-
-  for (const key of ['position', 'normal', 'tangent', 'scale', 'rotation', 'ageColor', 'exposure', 'boneIndex']) {
-    const stride = (key === 'position' || key === 'normal' || key === 'tangent') ? 3 : 1;
-    for (let i = 0; i < r1.count * stride; i++) {
-      assert.strictEqual(
-        r1[key][i],
-        r2[key][i],
-        `leafScale determinism: ${key}[${i}] differs on identical inputs`
-      );
+test('expandClumpsToLeaves: leaves inherit their source clump bone/exposure/age', () => {
+  const genome = makeBushyGenome({ structuralSeed: 11 });
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  const leaves = expandClumpsToLeaves(clumps, genome);
+  // Each block of LEAVES_PER_CLUMP leaves came from clump c → must share its scalars.
+  for (let c = 0; c < clumps.count; c++) {
+    for (let j = 0; j < LEAVES_PER_CLUMP; j++) {
+      const li = c * LEAVES_PER_CLUMP + j;
+      assert.strictEqual(leaves.boneIndex[li], clumps.boneIndex[c], `bone mismatch clump ${c} leaf ${j}`);
+      assert.strictEqual(leaves.ageColor[li], clumps.ageColor[c], `age mismatch clump ${c} leaf ${j}`);
+      assert.strictEqual(leaves.exposure[li], clumps.exposure[c], `exposure mismatch clump ${c} leaf ${j}`);
     }
   }
+});
+
+test('expandClumpsToLeaves: frond/needle/spiny canopies pass through unchanged (K=1)', () => {
+  const graph = buildGraph(makeBushyGenome({ structuralSeed: 3 }));
+  for (const override of [{ leafDivision: 1 }, { leafWidth: 0.04 }, { rosette: 1 }, { spininess: 0.5 }]) {
+    const genome = makeBushyGenome({ structuralSeed: 3, ...override });
+    const clumps = generateFoliage(graph, genome);
+    const out    = expandClumpsToLeaves(clumps, genome);
+    assert.strictEqual(out, clumps, `expected passthrough for ${JSON.stringify(override)}`);
+  }
+});
+
+test('expandClumpsToLeaves is deterministic for the same (foliage, genome)', () => {
+  const genome = makeBushyGenome({ structuralSeed: 99 });
+  const graph  = buildGraph(genome);
+  const clumps = generateFoliage(graph, genome);
+  const a = expandClumpsToLeaves(clumps, genome);
+  const b = expandClumpsToLeaves(clumps, genome);
+  assert.strictEqual(a.count, b.count);
+  assert.deepStrictEqual(a.position, b.position);
+  assert.deepStrictEqual(a.tangent, b.tangent);
+  assert.deepStrictEqual(a.scale, b.scale);
 });

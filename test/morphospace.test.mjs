@@ -72,9 +72,17 @@ const NEUTRAL_FILL = Object.freeze({
   leafTip:       0.40,
   leafSerration: 0.00,
   leafLobing:    0.00,
-  barkColor:    0.85,
-  barkPattern:  0.80,
-  weep:         0.00,
+  leafSkew:      0.50,
+  barkHue:        0.85,
+  barkLightness:  0.30,
+  barkRelief:     0.85,
+  barkLenticels:  0.00,
+  barkScale:      0.50,
+  barkOrient:     0.70,
+  barkPlates:     0.45,
+  barkShed:       0.00,
+  barkUnderHue:   0.75,
+  weep:           0.00,
   // trunkHeight=0.5 is the identity (1.0× scale); goldens stay valid.
   trunkHeight:  0.50,
   // New inert genes (draws 40–42) — 0 = strict no-op
@@ -84,14 +92,13 @@ const NEUTRAL_FILL = Object.freeze({
   // New inert genes (draws 43–45) — identity defaults
   woodiness:    1.00,
   whorl:        0.00,
+  crownStart:   1.00,
   tipTuft:      0.00,
   // New inert genes (draws 46–48) — identity defaults
-  needleLeaf:   0.00,
-  leafScale:    1.00,
-  frondLeaf:    0.00,
+  leafDivision: 0.00,
+  frondFan:     0.00,  // 0 = pinnate/feather frond (identity)
   phototropism: 1.00,  // 1.0 = full phototropism (identity)
   trunkTaper:   0.00,  // 0 = identity (trunk taper unchanged)
-  trunkRings:   0.00,  // 0 = identity (no ring banding — bark byte-identical)
   // taper is in FLORA_SCHEMA but NOT in the per-form table; fill with neutral
   taper:        0.50,
 });

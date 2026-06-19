@@ -54,7 +54,8 @@ export function superformulaPoint(theta, params) {
 }
 
 export function superformulaOutline(params, steps = 120) {
-  const { axialStretch = 2, serration = 0, serrationFreq = 10, xScale = 1 } = params;
+  const { axialStretch = 2, serration = 0, serrationFreq = 10, xScale = 1,
+          skewGamma = 1 } = params;
 
   // 1. Sample raw points
   const raw = [];
@@ -99,23 +100,55 @@ export function superformulaOutline(params, steps = 120) {
     y: (p.y - minY) / leafLen,
   }));
 
-  // 6. Apply serration along outward normals
+  // 5b. Vertical skew — move the widest point along the midrib (leafSkew gene).
+  //     A monotonic y-warp y' = y^skewGamma repositions the widest part of the
+  //     blade without changing its width-at-height: skewGamma=1 is identity
+  //     (symmetric ovate); skewGamma>1 pulls the widest point toward the BASE
+  //     and stretches the upper blade into an acuminate (drawn-out) tip — the
+  //     ovate, base-heavy silhouette of birch/most broadleaves; skewGamma<1
+  //     gives an obovate (widest near the tip) leaf. y stays in [0,1].
+  if (skewGamma !== 1) {
+    for (let i = 0; i < normalized.length; i++) {
+      normalized[i].y = Math.pow(normalized[i].y, skewGamma);
+    }
+  }
+
+  // 6. Apply serration as small OUTWARD marginal teeth.
+  //
+  //   Teeth are sized as a FRACTION of the leaf's half-width (scale-invariant)
+  //   and clamped so they never exceed ~⅓ of it — an absolute amplitude would
+  //   shred a narrow/elongated leaf (whose half-width may be < the tooth size)
+  //   into a self-intersecting scatter. They are outward-only (a toothed margin,
+  //   not a wavy ripple) and fade to zero toward the tip/base (|x|→0) so the
+  //   apex stays sharp. Neighbours are read from an UNMODIFIED copy so one
+  //   displaced point never feeds into the next (no cascading distortion).
   if (serration > 0) {
     const N = normalized.length;
+    let nMinX = Infinity, nMaxX = -Infinity;
+    for (const p of normalized) {
+      if (p.x < nMinX) nMinX = p.x;
+      if (p.x > nMaxX) nMaxX = p.x;
+    }
+    const halfW = Math.max(1e-3, (nMaxX - nMinX) / 2);
+    // Deeper, clearly-visible teeth ("ridges") — still a safe fraction of the
+    // half-width so a narrow leaf can't be shredded (the old absolute-size bug).
+    const toothDepth = Math.min(0.30, serration * 3.5) * halfW;
+    const src = normalized.map(p => ({ x: p.x, y: p.y }));
     for (let i = 0; i < N; i++) {
-      const prev = normalized[(i - 1 + N) % N];
-      const next = normalized[(i + 1) % N];
-      // outward normal = perpendicular to edge, pointing away from centroid (x=0)
+      const prev = src[(i - 1 + N) % N];
+      const next = src[(i + 1) % N];
+      const cur  = src[i];
+      // outward normal = edge rotated 90°, flipped to point away from the x=0 axis
       const edgeDx = next.x - prev.x;
       const edgeDy = next.y - prev.y;
       const len = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
-      // Rotate edge 90° for normal
       let nx = -edgeDy / len;
-      let ny = edgeDx / len;
-      // Ensure outward (away from center x=0)
-      if (nx * normalized[i].x < 0) { nx = -nx; ny = -ny; }
-      const amp = serration * Math.sin((i * 2 * Math.PI * serrationFreq) / N);
-      normalized[i] = { x: normalized[i].x + nx * amp, y: normalized[i].y + ny * amp };
+      let ny =  edgeDx / len;
+      if (nx * cur.x < 0) { nx = -nx; ny = -ny; }
+      const tooth    = Math.max(0, Math.sin((i * 2 * Math.PI * serrationFreq) / N));
+      const edgeFade = Math.min(1, Math.abs(cur.x) / halfW);  // 0 on axis → 1 at widest
+      const amp = toothDepth * tooth * edgeFade;
+      normalized[i] = { x: cur.x + nx * amp, y: cur.y + ny * amp };
     }
   }
 
@@ -253,6 +286,71 @@ export function growVenation(outline, params, rng) {
 }
 
 // ---------------------------------------------------------------------------
+// Pinnate venation — a straight central midrib (base→tip) with secondary veins
+// branching off in pairs and sweeping outward-and-up toward the margin. This is
+// the venation of a real birch/elm/most broadleaves (space-colonization gives a
+// dendritic web that doesn't read as pinnate). Pure + Node-safe (no rng — the
+// pattern is deterministic from the outline). Returns the same {nodes, edges}
+// shape growVenation does (depth drives drawLeaf's vein line-width: midrib=0,
+// secondaries=2, tertiaries=3), so drawLeaf consumes it unchanged.
+// ---------------------------------------------------------------------------
+
+export function pinnateVenation(outline, { pairs = 9 } = {}) {
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of outline) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const H = (maxY - minY) || 1;
+  const band = (H / (pairs + 2)) * 0.75;
+
+  // Half-width of the blade at height y (max |x| of outline points in a y-band).
+  function halfWidthAt(y) {
+    let w = 0;
+    for (const p of outline) {
+      if (Math.abs(p.y - y) <= band) { const ax = Math.abs(p.x); if (ax > w) w = ax; }
+    }
+    return w;
+  }
+
+  const nodes = [];
+  const edges = [];
+
+  // Midrib: base → tip along the central axis (x=0).
+  const midSteps = pairs + 1;
+  const midIdx = [];
+  for (let i = 0; i <= midSteps; i++) {
+    const t = i / midSteps;
+    nodes.push({ x: 0, y: minY + t * H, depth: 0 });
+    const idx = nodes.length - 1;
+    if (i > 0) edges.push({ from: midIdx[i - 1], to: idx });
+    midIdx.push(idx);
+  }
+
+  // Secondary vein pairs from interior midrib nodes, sweeping up toward the apex.
+  for (let k = 1; k <= pairs; k++) {
+    const mi = midIdx[k];
+    const my = nodes[mi].y;
+    const tt = (my - minY) / H;                  // 0 at base → 1 at tip
+    const hw = halfWidthAt(my);
+    if (hw < 1e-4) continue;
+    const ex = hw * 0.82;                          // reach most of the way to the margin
+    const ey = my + (maxY - my) * (0.12 + 0.20 * (1 - tt));  // lower veins angle up more
+    // Mid-point node so the vein reads as a gentle two-segment sweep, not a spoke.
+    const mx = ex * 0.5;
+    const midY = my + (ey - my) * 0.55;
+    const ri = nodes.length; nodes.push({ x:  mx, y: midY, depth: 2 });
+    const re = nodes.length; nodes.push({ x:  ex, y: ey,   depth: 3 });
+    edges.push({ from: mi, to: ri }, { from: ri, to: re });
+    const li = nodes.length; nodes.push({ x: -mx, y: midY, depth: 2 });
+    const le = nodes.length; nodes.push({ x: -ex, y: ey,   depth: 3 });
+    edges.push({ from: mi, to: li }, { from: li, to: le });
+  }
+
+  return { nodes, edges };
+}
+
+// ---------------------------------------------------------------------------
 // Leaf cluster shape math — pure, importable in Node without document.
 // ---------------------------------------------------------------------------
 
@@ -311,7 +409,8 @@ export function clusterLeafCount(seed) {
  *   serration boosted by ~2×.
  */
 export function leafBaseParams(genes) {
-  const { leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4, leafSerration = 0, leafLobing = 0 } = genes;
+  const { leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4, leafSerration = 0, leafLobing = 0,
+          leafSkew = 0.5 } = genes;
 
   // Lobe count: 2 (ovate) → 5 (5-lobed palmate maple)
   const m = 2 + leafLobing * 3;
@@ -346,9 +445,16 @@ export function leafBaseParams(genes) {
   // At leafLobing=0 the boost is 0, preserving the existing simple-leaf behaviour.
   const serrationBoost = 1 + leafLobing * 1.8;      // [1×, 2.8×]
   const serration     = leafSerration * 0.12 * serrationBoost;
-  const serrationFreq = 6 + leafSerration * 12;
+  const serrationFreq = 8 + leafSerration * 24;   // finer, more numerous teeth (birch is finely serrate)
 
-  return { m, n1, n2, n3, a, b, axialStretch, xScale, serration, serrationFreq };
+  // Skew: leafSkew 0.5 = symmetric (identity). The widest point is moved to the
+  // normalized height `leafSkew` via the warp y' = y^skewGamma, where
+  // skewGamma = log(leafSkew)/log(0.5) (so leafSkew=0.5 → 1.0 = no-op).
+  // Clamped away from the endpoints to keep the exponent finite.
+  const skewClamped = Math.max(0.08, Math.min(0.92, leafSkew));
+  const skewGamma = Math.log(skewClamped) / Math.log(0.5);
+
+  return { m, n1, n2, n3, a, b, axialStretch, xScale, serration, serrationFreq, skewGamma };
 }
 
 function leafVariantParams(baseParams, rng) {
@@ -363,6 +469,7 @@ function leafVariantParams(baseParams, rng) {
     xScale:        baseParams.xScale,
     serration:     baseParams.serration,
     serrationFreq: baseParams.serrationFreq,
+    skewGamma:     baseParams.skewGamma,   // carry the leafSkew warp into every cluster leaf
   };
 }
 
@@ -436,96 +543,6 @@ function lightenColor(cssColor, amount) {
 // Needle fascicle helpers — pure math, Node-safe.
 // ---------------------------------------------------------------------------
 
-/**
- * Derive per-needle params for a fascicle spray.
- * Returns an array of { angle, length, width } for `count` needles.
- * Needles splay symmetrically around straight-up (angle=0 = pointing +Y),
- * with slight jitter so it looks organic.
- *
- * @param {number} seed  - integer seed (from genome structuralSeed or similar)
- * @param {number} count - number of needles (8–20)
- * @returns {{ angle: number, length: number, width: number }[]}
- */
-export function needleFascicleParams(seed, count) {
-  const rng = mulberry32(seed ^ 0xC0FE1111);   // isolated sub-stream; no side-effects
-
-  // Tight splay arc: needles fan across 35° centred on +Y — narrow spiky fascicle, not a broad fan
-  const spreadRad = (35 / 180) * Math.PI;
-  const step = spreadRad / (count - 1);
-  const baseAngle = -spreadRad / 2;
-
-  return Array.from({ length: count }, (_, i) => {
-    const jitter   = (rng() - 0.5) * step * 0.4;
-    const angle    = baseAngle + i * step + jitter;
-    const length   = 0.82 + rng() * 0.18;   // relative to card height [0.82, 1.00] — long spikes filling card
-    const width    = 0.012 + rng() * 0.010;  // relative to card height [0.012, 0.022]
-    return { angle, length, width };
-  });
-}
-
-/**
- * Draw a needle fascicle (pine/spruce style) on the canvas.
- * All needles share a common base at (cx, cy) and splay upward.
- *
- * @param {CanvasRenderingContext2D} ctx
- * @param {number} cx        - base x (attachment point)
- * @param {number} cy        - base y (attachment point)
- * @param {number} cardH     - canvas card height in pixels (needles scale to this)
- * @param {string} fillColor - CSS color for needles
- * @param {{ angle: number, length: number, width: number }[]} needles
- */
-function drawNeedleFascicle(ctx, cx, cy, cardH, fillColor, needles) {
-  ctx.save();
-
-  // A short shared basal sheath: a small dark cylinder at the base.
-  const sheathH  = cardH * 0.06;
-  const sheathW  = cardH * 0.04;
-  ctx.fillStyle  = lightenColor(fillColor, -0.10);  // slightly darker
-  ctx.beginPath();
-  ctx.ellipse(cx, cy - sheathH / 2, sheathW / 2, sheathH / 2, 0, 0, 2 * Math.PI);
-  ctx.fill();
-
-  // Draw each needle as a very thin, tapered bezier curve.
-  for (const needle of needles) {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(needle.angle);           // angle=0 points straight up (+Y before canvas flip)
-
-    const nLen  = cardH * needle.length;
-    const nHalf = cardH * needle.width / 2;
-
-    // Needle shape: tapered — full width at base, zero at tip.
-    ctx.beginPath();
-    ctx.moveTo(0, 0);                   // base left
-    ctx.lineTo(-nHalf, 0);
-    // Cubic to tip — slight curve outward then in
-    ctx.bezierCurveTo(-nHalf * 0.8, -nLen * 0.4, -nHalf * 0.3, -nLen * 0.75, 0, -nLen);
-    ctx.bezierCurveTo( nHalf * 0.3, -nLen * 0.75,  nHalf * 0.8, -nLen * 0.4,  nHalf, 0);
-    ctx.closePath();
-
-    // Gradient: slightly lighter at base, colour at tip
-    const grad = ctx.createLinearGradient(0, 0, 0, -nLen);
-    grad.addColorStop(0, lightenColor(fillColor, 0.08));
-    grad.addColorStop(1, fillColor);
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Midrib — a very fine line for the vein
-    ctx.strokeStyle = lightenColor(fillColor, 0.15);
-    ctx.lineWidth   = Math.max(0.3, nHalf * 0.4);
-    ctx.globalAlpha = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, -nLen);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    ctx.restore();
-  }
-
-  ctx.restore();
-}
-
 // ---------------------------------------------------------------------------
 // Palm frond (pinnate) helpers — pure math, Node-safe.
 // ---------------------------------------------------------------------------
@@ -570,11 +587,17 @@ export function frondLeafletParams(seed, count) {
     const splayJitter = (rng() - 0.5) * (15 / 180) * Math.PI;
     const angle = baseSplay + splayJitter;
 
+    // Fan spread angle (used only when frondFan > 0): evenly distribute leaflets across
+    // a broad radial fan — center (~4.5°) → edge (~85°) — so the rachis-collapsed
+    // palmate form reads as a Washingtonia-style fan. At frondFan=0 it is never used.
+    const fanSpan = pairCount > 1 ? i / (pairCount - 1) : 0;
+    const fanA    = 0.08 + fanSpan * 1.40;   // ~4.5° (center) → ~85° (edge), radians
+
     // Right leaflet (+angle)
-    leaflets.push({ t, angle: +angle, length });
+    leaflets.push({ t, angle: +angle, length, fanAngle: +fanA });
     // Left leaflet (−angle) — separate jitter for slight asymmetry
     const leftJitter = (rng() - 0.5) * (8 / 180) * Math.PI;
-    leaflets.push({ t, angle: -(angle + leftJitter), length });
+    leaflets.push({ t, angle: -(angle + leftJitter), length, fanAngle: -fanA });
   }
 
   return leaflets;
@@ -594,13 +617,17 @@ export function frondLeafletParams(seed, count) {
  * @param {string} fillColor - CSS color for frond
  * @param {{ t: number, angle: number, length: number }[]} leaflets
  */
-function drawPalmFrond(ctx, cx, cy, cardW, cardH, fillColor, leaflets) {
+function drawPalmFrond(ctx, cx, cy, cardW, cardH, fillColor, leaflets, frondFan = 0) {
   ctx.save();
 
+  // frondFan: 0 = pinnate FEATHER (leaflets spread along the rachis — coconut), 1 = palmate
+  // FAN (rachis collapses to a short petiole and leaflets radiate from the base — Washingtonia).
+  // At frondFan=0 every expression below reduces to the original feather frond (byte-identical).
+  //
   // Rachis: a gently curved, tapering line from base to tip.
-  // Base width ≈ 3% of cardW; tapers to a point at tip.
   // The rachis curves slightly to the right to give a natural droop (like a real palm frond).
-  const rachisLen = cardH * 0.90;
+  const fullRachisLen = cardH * 0.90;                       // basis for leaflet length (fan blades stay long)
+  const rachisLen = fullRachisLen * (1 - frondFan * 0.85);  // drawn rachis collapses to a petiole as it fans
   const tipX = cx + cardW * 0.06;   // slight rightward lean at tip
   const tipY = cy - rachisLen;
 
@@ -665,18 +692,25 @@ function drawPalmFrond(ctx, cx, cy, cardW, cardH, fillColor, leaflets) {
   // Leaflet base attaches to the rachis at parameter t; it extends in the direction
   // tangent-to-rachis rotated by the splay angle, swept back (away from tip direction).
   for (const leaflet of leaflets) {
-    const pt   = bezierPt(leaflet.t);
-    const tan  = bezierTangent(leaflet.t);
+    // Converge the attachment point toward the base (t→0) as the frond fans (palmate).
+    const tEff = leaflet.t * (1 - frondFan);
+    const pt   = bezierPt(tEff);
+    const tan  = bezierTangent(tEff);
     const tanLen = Math.sqrt(tan.x * tan.x + tan.y * tan.y) || 1;
     // Angle of tangent from vertical (rachis direction)
     const rachisAngle = Math.atan2(tan.x / tanLen, -tan.y / tanLen);
 
-    // Leaflet direction: rachis tangent + splay angle (leaflet.angle already encodes sign)
-    const leafletAngle = rachisAngle + leaflet.angle;
+    // Blend the splay: feather = swept-back leaflet.angle; fan = even radial fanAngle.
+    // (fanAngle falls back to leaflet.angle for any older params array lacking it.)
+    const fanA     = leaflet.fanAngle !== undefined ? leaflet.fanAngle : leaflet.angle;
+    const angleEff = leaflet.angle * (1 - frondFan) + fanA * frondFan;
+    const leafletAngle = rachisAngle + angleEff;
 
-    // Maximum leaflet length scales with rachis length; envelope already in [0.05,1]
-    const maxLeafletLen = rachisLen * 0.42;
-    const leafletLen    = maxLeafletLen * leaflet.length;
+    // Leaflet length: feather uses the bell envelope; fan blades are long + ~uniform.
+    // Based on the FULL rachis so fan blades don't shrink with the collapsed petiole.
+    const maxLeafletLen = fullRachisLen * 0.42;
+    const lengthEff     = leaflet.length * (1 - frondFan) + 0.92 * frondFan;
+    const leafletLen    = maxLeafletLen * lengthEff;
     const leafletBaseW  = Math.max(1.5, leafletLen * 0.055);   // half-width at base
 
     // Direction vector for leaflet
@@ -738,7 +772,8 @@ function drawPalmFrond(ctx, cx, cy, cardW, cardH, fillColor, leaflets) {
 export function makeLeafClusterTexture({
   pigment, breadth = 0.5, seed = 1, resolution = 'high',
   leafWidth = 0.5, leafLength = 0.45, leafTip = 0.4,
-  leafSerration = 0.0, leafLobing = 0.0, needleLeaf = 0, frondLeaf = 0,
+  leafSerration = 0.0, leafLobing = 0.0, leafSkew = 0.5, leafDivision = 0, frondFan = 0,
+  leafMode = 'single',
 }) {
   if (typeof document === 'undefined') {
     return null;
@@ -756,65 +791,75 @@ export function makeLeafClusterTexture({
 
   // ---------------------------------------------------------------------------
   // Context-parameterized draw helpers.
-  // All module-level draw functions (drawLeaf, drawNeedleFascicle, drawPalmFrond)
-  // already accept an explicit ctx argument, so we can redirect them to any canvas.
+  // The module-level draw functions (drawLeaf, drawPalmFrond) already accept an
+  // explicit ctx argument, so we can redirect them to any canvas.
   // ---------------------------------------------------------------------------
 
   function _drawBroadleafOn(target) {
-    const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing });
+    const baseParams = leafBaseParams({ leafWidth, leafLength, leafTip, leafSerration, leafLobing, leafSkew });
 
-    const count  = clusterLeafCount(seed);
-    const leaves = clusterLeafParams(seed, count);
-
-    const attachX = SIZE / 2;
-    const attachY = SIZE - 8;
-    const leafH   = SIZE * 0.55;
-
-    const drawOrder = [...leaves]
-      .map((l, i) => ({ ...l, i }))
-      .sort((a, b) => Math.abs(b.angle) - Math.abs(a.angle));
-
-    for (const leaf of drawOrder) {
-      const leafIdx    = leaf.i;
-      const variantRng = mulberry32((seed * 1009 + leafIdx * 37) >>> 0);
-      const vp         = leafVariantParams(baseParams, variantRng);
-      const outline    = superformulaOutline(vp, 120);
-      const venation   = growVenation(
-        outline,
-        { nSources: 60, step: 0.04, influenceRadius: 0.25, killRadius: 0.06, maxIter: 200 },
-        mulberry32((seed * 31 + leafIdx * 7) >>> 0)
-      );
-
-      const h = ((baseH + leaf.hueDelta) % 1 + 1) % 1;
-      const l = Math.max(0.05, Math.min(0.95, baseL + leaf.lightDelta));
-      const [lr, lg, lb] = hslToRgb(h, baseS, l);
-      const [vr, vg, vb] = hslToRgb(h, baseS, Math.min(1, l + 0.20));
-
-      const fillColor   = `rgb(${toI(lr)},${toI(lg)},${toI(lb)})`;
-      const veinColor   = `rgb(${toI(vr)},${toI(vg)},${toI(vb)})`;
-      const bx          = attachX + leaf.ox * SIZE;
-      const by          = attachY - leaf.oy * SIZE;
-      const scaledLeafH = leafH * leaf.scale;
-
-      drawLeaf(target, bx, by, scaledLeafH, leaf.angle, fillColor, veinColor, outline, venation);
+    // ----- CLUSTER mode (the previous implementation): a sprig of several -----
+    // leaves painted into ONE sprite. Far fewer instances/triangles because each
+    // foliage anchor stays a single card (expandClumpsToLeaves passes through).
+    if (leafMode === 'cluster') {
+      const count  = clusterLeafCount(seed);
+      const leaves = clusterLeafParams(seed, count);
+      const attachX = SIZE / 2;
+      const attachY = SIZE - 8;
+      const leafH   = SIZE * 0.55;
+      const drawOrder = [...leaves]
+        .map((l, i) => ({ ...l, i }))
+        .sort((a, b) => Math.abs(b.angle) - Math.abs(a.angle));
+      for (const leaf of drawOrder) {
+        const variantRng = mulberry32((seed * 1009 + leaf.i * 37) >>> 0);
+        const vp         = leafVariantParams(baseParams, variantRng);
+        const outline    = superformulaOutline(vp, 120);
+        const veinPairs  = Math.max(6, Math.min(9, Math.round((vp.serrationFreq ?? 10) * 0.4)));
+        const venation   = pinnateVenation(outline, { pairs: veinPairs });
+        const h = ((baseH + leaf.hueDelta) % 1 + 1) % 1;
+        const l = Math.max(0.05, Math.min(0.95, baseL + leaf.lightDelta));
+        const [lr, lg, lb] = hslToRgb(h, baseS, l);
+        const [vr, vg, vb] = hslToRgb(h, baseS, Math.min(1, l + 0.20));
+        const fillColor = `rgb(${toI(lr)},${toI(lg)},${toI(lb)})`;
+        const veinColor = `rgb(${toI(vr)},${toI(vg)},${toI(vb)})`;
+        const bx = attachX + leaf.ox * SIZE;
+        const by = attachY - leaf.oy * SIZE;
+        drawLeaf(target, bx, by, leafH * leaf.scale, leaf.angle, fillColor, veinColor, outline, venation);
+      }
+      return;
     }
-  }
 
-  function _drawNeedlesOn(target) {
-    const needles  = needleFascicleParams(seed, 10);
-    const cardH    = SIZE * 0.80;
-    const attachX  = SIZE / 2;
-    const attachY  = SIZE - 8;
+    // ----- SINGLE-LEAF mode (default): ONE leaf per card, the shape-IS-the- -----
+    // texture model. Canopy density comes from many single-leaf cards (foliage
+    // clumps fanned out by expandClumpsToLeaves).
+    const outline = superformulaOutline(baseParams, 160);
 
-    const needleH  = ((baseH + 0.01) % 1 + 1) % 1;
-    const needleL  = Math.min(0.55, Math.max(0.08, baseL - 0.04));
-    const [nr, ng, nb] = hslToRgb(needleH, baseS, needleL);
+    // Fit the single leaf to fill the card: base at bottom-centre, tip up. leafH
+    // is bounded by BOTH the card height and width so a broad leaf doesn't clip.
+    let minX = Infinity, maxX = -Infinity;
+    for (const p of outline) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; }
+    const wExtent = Math.max(0.02, maxX - minX);          // outline y is already 0..1
+    const leafH = Math.min(SIZE * 0.92, (SIZE * 0.92) / (wExtent * 0.5));
+    const cx = SIZE / 2;
+    const cy = SIZE - SIZE * 0.05;                        // base near the bottom edge
 
-    drawNeedleFascicle(target, attachX, attachY, cardH, `rgb(${toI(nr)},${toI(ng)},${toI(nb)})`, needles);
+    const veinPairs = Math.max(6, Math.min(9, Math.round((baseParams.serrationFreq ?? 10) * 0.4)));
+    const venation  = pinnateVenation(outline, { pairs: veinPairs });
+
+    const [lr, lg, lb] = hslToRgb(baseH, baseS, baseL);
+    const [vr, vg, vb] = hslToRgb(baseH, baseS, Math.min(1, baseL + 0.20));
+    const fillColor = `rgb(${toI(lr)},${toI(lg)},${toI(lb)})`;
+    const veinColor = `rgb(${toI(vr)},${toI(vg)},${toI(vb)})`;
+
+    drawLeaf(target, cx, cy, leafH, 0, fillColor, veinColor, outline, venation);
   }
 
   function _drawFrondOn(target) {
-    const leaflets = frondLeafletParams(seed, 20);
+    // Leaflet/division count is driven by leafLobing (reusing the existing "division"
+    // slider for fronds instead of a new gene): 8 (low) → 24 (high) leaflets, kept even
+    // for left/right pairs. frondFan then morphs feather (along rachis) ↔ palmate fan.
+    const frondCount = 2 * Math.round(4 + leafLobing * 8);   // 8..24
+    const leaflets = frondLeafletParams(seed, frondCount);
     const attachX  = SIZE / 2;
     const attachY  = SIZE - 8;
 
@@ -822,7 +867,7 @@ export function makeLeafClusterTexture({
     const frondL   = Math.min(0.60, Math.max(0.10, baseL + 0.02));
     const [fr, fg, fb] = hslToRgb(frondH, baseS, frondL);
 
-    drawPalmFrond(target, attachX, attachY, SIZE, SIZE, `rgb(${toI(fr)},${toI(fg)},${toI(fb)})`, leaflets);
+    drawPalmFrond(target, attachX, attachY, SIZE, SIZE, `rgb(${toI(fr)},${toI(fg)},${toI(fb)})`, leaflets, frondFan);
   }
 
   // ---------------------------------------------------------------------------
@@ -842,40 +887,88 @@ export function makeLeafClusterTexture({
   }
 
   // ---------------------------------------------------------------------------
-  // Dispatch:
-  //   needleLeaf===0 && frondLeaf===0  → broadleaf directly (byte-identical).
-  //   needleLeaf===1                   → needles directly (byte-identical).
-  //   frondLeaf===1  (needleLeaf===0)  → frond directly (byte-identical).
-  //   0 < needleLeaf < 1               → crossfade: broadleaf + needles via scratch.
-  //   0 < frondLeaf  < 1               → crossfade: broadleaf + frond via scratch.
-  //
-  // Precedence: needleLeaf wins over frondLeaf when both > 0.
+  // Dispatch on the single leafDivision axis (0 = simple blade, 1 = compound frond):
+  //   leafDivision <= 0  → simple blade directly (a NEEDLE is this with leafWidth→0).
+  //   leafDivision >= 1  → compound frond directly.
+  //   0 < leafDivision < 1 → crossfade simple blade + frond via scratch.
+  // (The old discrete needle-fascicle path is gone — a needle is a narrow blade.)
   // ---------------------------------------------------------------------------
 
-  if (needleLeaf === 0 && frondLeaf === 0) {
-    // Pure broadleaf — no changes to any draw call paths.
+  if (leafDivision <= 0) {
     _drawBroadleafOn(ctx);
 
-  } else if (needleLeaf === 1) {
-    // Pure needle — draw directly, byte-identical to the old needleLeaf > 0.5 path.
-    _drawNeedlesOn(ctx);
-
-  } else if (needleLeaf > 0) {
-    // Blend: broadleaf at (1-needleLeaf), needles at needleLeaf.
-    _stampAt(sctx => _drawBroadleafOn(sctx), 1 - needleLeaf);
-    _stampAt(sctx => _drawNeedlesOn(sctx),   needleLeaf);
-
-  } else if (frondLeaf === 1) {
-    // Pure frond — draw directly, byte-identical to the old frondLeaf > 0.5 path.
+  } else if (leafDivision >= 1) {
     _drawFrondOn(ctx);
 
   } else {
-    // frondLeaf > 0 && frondLeaf < 1: blend broadleaf + frond.
-    _stampAt(sctx => _drawBroadleafOn(sctx), 1 - frondLeaf);
-    _stampAt(sctx => _drawFrondOn(sctx),     frondLeaf);
+    _stampAt(sctx => _drawBroadleafOn(sctx), 1 - leafDivision);
+    _stampAt(sctx => _drawFrondOn(sctx),     leafDivision);
   }
 
-  return { source: canvas, width: SIZE, height: SIZE };
+  // Derive a tangent-space NORMAL MAP from the finished sprite so leaf surface
+  // detail (midrib, veins, blade gradient, silhouette edge) catches light instead
+  // of every card shading dead-flat. Height ≈ luminance inside the alpha cutout
+  // (veins are drawn lighter → ridges); Sobel gradient → normal; alpha carried
+  // over so the cutout matches the colour map exactly. Guarded: if the canvas
+  // backend has no pixel access (test mocks / headless), skip it gracefully.
+  let normal = null;
+  try {
+    normal = buildLeafNormalMap(canvas, SIZE, LEAF_NORMAL_STRENGTH);
+  } catch (_) {
+    normal = null;
+  }
+
+  return { source: canvas, normal, width: SIZE, height: SIZE };
+}
+
+// Tangent-space normal-map strength (Sobel gradient gain). Higher = deeper relief.
+const LEAF_NORMAL_STRENGTH = 2.5;
+
+/**
+ * buildLeafNormalMap(srcCanvas, SIZE, strength) -> HTMLCanvasElement
+ *
+ * Tangent-space normal map from the colour sprite's luminance height field,
+ * masked by the sprite alpha. Browser-only (uses canvas pixel access).
+ */
+function buildLeafNormalMap(srcCanvas, SIZE, strength) {
+  const sctx = srcCanvas.getContext('2d');
+  const src = sctx.getImageData(0, 0, SIZE, SIZE).data;
+
+  // Height field: luminance where the sprite is opaque, 0 outside (so the
+  // silhouette edge produces an inward-curling normal).
+  const h = new Float32Array(SIZE * SIZE);
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const a = src[i * 4 + 3] / 255;
+    const lum = (0.299 * src[i * 4] + 0.587 * src[i * 4 + 1] + 0.114 * src[i * 4 + 2]) / 255;
+    h[i] = a > 0.03 ? lum : 0;
+  }
+
+  const out = document.createElement('canvas');
+  out.width = SIZE;
+  out.height = SIZE;
+  const octx = out.getContext('2d');
+  const oimg = octx.createImageData(SIZE, SIZE);
+  const od = oimg.data;
+
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = y * SIZE + x;
+      const xl = h[y * SIZE + (x > 0 ? x - 1 : x)];
+      const xr = h[y * SIZE + (x < SIZE - 1 ? x + 1 : x)];
+      const yu = h[(y > 0 ? y - 1 : y) * SIZE + x];
+      const yd = h[(y < SIZE - 1 ? y + 1 : y) * SIZE + x];
+      let nx = (xl - xr) * strength;
+      let ny = (yd - yu) * strength;   // +Y up in tangent space
+      let nz = 1.0;
+      const inv = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
+      od[i * 4]     = Math.round((nx * inv * 0.5 + 0.5) * 255);
+      od[i * 4 + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+      od[i * 4 + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+      od[i * 4 + 3] = src[i * 4 + 3];   // carry alpha cutout
+    }
+  }
+  octx.putImageData(oimg, 0, 0);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

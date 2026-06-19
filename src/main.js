@@ -3,12 +3,15 @@ import { createViewer }                   from './viewer.js';
 import { createRenderModeController }     from './renderModes.js';
 import { TREE_DEFAULT, PRESETS }          from './presets.js';
 import { pigmentToColor }                 from './colorRamp.js';
+import { mountInspectorPanels }           from './inspectorPanels.js';
+import { createBarkSwatch }               from './barkSwatch.js';
 
 // =============================================================================
 // MODULE STATE
 // =============================================================================
 let seed   = 42;
 let genome = null;   // current specimen's full gene vector (incl. structuralSeed)
+let lastResolved = null;   // most recent resolve() output — fed to the inspector dock
 
 // =============================================================================
 // MORPHOLOGICAL SLIDER REGISTRY
@@ -16,7 +19,7 @@ let genome = null;   // current specimen's full gene vector (incl. structuralSee
 // =============================================================================
 const MORPH_GENES = [
   // Form
-  'branchiness', 'branchFactorN', 'tillering', 'radialOrder', 'whorl',
+  'branchiness', 'branchFactorN', 'tillering', 'radialOrder', 'whorl', 'crownStart',
   // Stem
   'succulence', 'stemGirth', 'taper', 'ribbing', 'segmentation', 'spininess', 'woodiness',
   // Appendage
@@ -25,10 +28,11 @@ const MORPH_GENES = [
   'verticality', 'rigidity', 'branchAngle', 'lengthRatio', 'apicalBias', 'droopBias',
   'weep', 'trunkHeight', 'trunkTaper',
   // Cosmetic
-  'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
-  'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
-  'barkColor', 'barkPattern',
-  'needleLeaf', 'leafScale', 'frondLeaf',
+  'pigment', 'leafSize', 'jitter', 'leafWidth',
+  'leafLength', 'leafTip', 'leafSerration', 'leafLobing', 'leafSkew',
+  'barkHue', 'barkLightness', 'barkRelief', 'barkLenticels', 'barkScale', 'barkOrient', 'barkPlates',
+  'barkShed', 'barkUnderHue',
+  'leafDivision', 'frondFan',
   // Roots
   'rootCount', 'rootDepth', 'rootSpread', 'rootFlare',
   'rootButtress', 'rootBranchiness', 'rootTaper',
@@ -41,6 +45,7 @@ const GENE_SLIDER_ID = {
   tillering:        'tilleringSlider',
   radialOrder:      'radialOrderSlider',
   whorl:            'whorlSlider',
+  crownStart:       'crownStartSlider',
   succulence:       'succulenceSlider',
   stemGirth:        'stemGirthSlider',
   taper:            'taperSlider',
@@ -59,21 +64,27 @@ const GENE_SLIDER_ID = {
   droopBias:        'droopBiasSlider',
   pigment:          'pigmentSlider',
   leafSize:         'leafSizeSlider',
-  leafDensity:      'leafDensitySlider',
   jitter:           'jitterSlider',
   leafWidth:        'leafWidthSlider',
   leafLength:       'leafLengthSlider',
   leafTip:          'leafTipSlider',
   leafSerration:    'leafSerrationSlider',
   leafLobing:       'leafLobingSlider',
+  leafSkew:         'leafSkewSlider',
   weep:             'weepSlider',
   trunkHeight:      'trunkHeightSlider',
   trunkTaper:       'trunkTaperSlider',
-  barkColor:        'barkColorSlider',
-  barkPattern:      'barkPatternSlider',
-  needleLeaf:       'needleLeafSlider',
-  leafScale:        'leafScaleSlider',
-  frondLeaf:        'frondLeafSlider',
+  barkHue:          'barkHueSlider',
+  barkLightness:    'barkLightnessSlider',
+  barkRelief:       'barkReliefSlider',
+  barkLenticels:    'barkLenticelsSlider',
+  barkScale:        'barkScaleSlider',
+  barkOrient:       'barkOrientSlider',
+  barkPlates:       'barkPlatesSlider',
+  barkShed:         'barkShedSlider',
+  barkUnderHue:     'barkUnderHueSlider',
+  leafDivision:     'leafDivisionSlider',
+  frondFan:         'frondFanSlider',
   // Roots
   rootCount:        'rootCountSlider',
   rootDepth:        'rootDepthSlider',
@@ -146,6 +157,60 @@ viewer.attachRenderModeController(renderModeCtrl);
   activateMode('lit');
 })();
 
+// =============================================================================
+// INSPECTOR DOCK — part previews (leaf shape / texture / bark / cross-section /
+// pigment) + isolate-part toggles. Render-only: reads the resolved organism and
+// already-built textures at the setPlant chokepoint; never re-runs generation.
+// =============================================================================
+const barkSwatch = createBarkSwatch(document.getElementById('insp-bark'));
+barkSwatch.start();
+
+const inspector = mountInspectorPanels({
+  viewer,
+  getGenome:   () => genome,
+  getResolved: () => lastResolved,
+  elements: {
+    leafShape:      document.getElementById('insp-leaf-shape'),
+    leafWireBtn:    document.getElementById('insp-leaf-wire'),
+    leafTexture:    document.getElementById('insp-leaf-texture'),
+    pigment:        document.getElementById('insp-pigment'),
+    pigmentRamp:    document.getElementById('insp-pigment-ramp'),
+    crossSection:   document.getElementById('insp-cross-section'),
+    toggleLeaves:   document.getElementById('insp-toggle-leaves'),
+    toggleBranches: document.getElementById('insp-toggle-branches'),
+  },
+});
+
+// Collapse/expand the dock from its header.
+(function wireInspectorCollapse() {
+  const dock   = document.getElementById('inspector-dock');
+  const header = document.getElementById('insp-header');
+  if (!dock || !header) return;
+  header.addEventListener('click', () => {
+    const collapsed = dock.classList.toggle('collapsed');
+    if (collapsed) {
+      // Stop spinning the bark swatch's WebGL context while it's hidden.
+      barkSwatch.stop();
+    } else {
+      // Re-paint on expand (canvases were sized 0 while hidden) and resume.
+      inspector.resize();
+      barkSwatch.resize();
+      barkSwatch.start();
+    }
+  });
+})();
+
+/**
+ * Push the freshly-resolved organism to the inspector dock. Called right after
+ * every viewer.setPlant() — the single chokepoint all slider/preset/reroll paths
+ * funnel through. RENDER-ONLY: no generation, no rng.
+ */
+function refreshInspector(resolved) {
+  lastResolved = resolved;
+  inspector.refresh();
+  barkSwatch.setGenome(resolved);
+}
+
 // Wire reveal-roots toggle button
 (function wireRootsRevealToggle() {
   const btn = document.getElementById('reveal-roots-btn');
@@ -186,6 +251,34 @@ viewer.attachRenderModeController(renderModeCtrl);
   });
 })();
 
+// Wire leaf-droop (gravity bend) slider — global per-leaf curve toward gravity.
+(function wireLeafDroop() {
+  const slider = document.getElementById('leaf-droop-slider');
+  if (!slider) return;
+  const apply = () => {
+    if (typeof viewer.setLeafBend === 'function') viewer.setLeafBend(parseFloat(slider.value));
+  };
+  slider.addEventListener('input', apply);
+  apply();   // push the initial value
+})();
+
+// Wire leaf-mode toggle — 'single' (one leaf per card) ↔ 'cluster' (multi-leaf
+// sprig per card, far fewer instances/triangles). Re-renders the current
+// specimen so the new mode takes effect (deterministic — same tree).
+(function wireLeafMode() {
+  const btn  = document.getElementById('leaf-mode-btn');
+  const icon = document.getElementById('leaf-mode-icon');
+  if (!btn) return;
+  let mode = 'single';
+  btn.addEventListener('click', () => {
+    mode = (mode === 'single') ? 'cluster' : 'single';
+    btn.classList.toggle('active', mode === 'cluster');
+    if (icon) icon.textContent = (mode === 'single') ? '1×' : 'N×';
+    if (typeof viewer.setLeafMode === 'function') viewer.setLeafMode(mode);
+    renderCurrent();   // rebuild the current tree with the new leaf mode
+  });
+})();
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -210,6 +303,7 @@ function renderCurrent() {
   if (!genome) return;
   const resolved = resolve(genome, getEnvelope());
   viewer.setPlant(resolved);
+  refreshInspector(resolved);
 }
 
 // =============================================================================
@@ -221,6 +315,7 @@ function generate() {
   syncSlidersFromGenome(genome);
   const resolved = resolve(genome, env);
   viewer.setPlant(resolved);
+  refreshInspector(resolved);
 }
 
 // =============================================================================
@@ -228,6 +323,8 @@ function generate() {
 // =============================================================================
 window.addEventListener('resize', () => {
   viewer.resize();
+  inspector.resize();
+  barkSwatch.resize();
 });
 
 // =============================================================================
@@ -440,6 +537,11 @@ genome = { ...TREE_DEFAULT };
 syncSlidersFromGenome(genome);
 const resolved = resolve(genome, getEnvelope());
 viewer.setPlant(resolved);
+refreshInspector(resolved);
+
+// Inspector canvases size from their laid-out client box; re-paint once after the
+// first layout/paint so they aren't stuck at a zero/stale size on initial load.
+requestAnimationFrame(() => { inspector.resize(); barkSwatch.resize(); });
 
 // =============================================================================
 // STATS PANEL — polls viewer.getStats() ~4×/sec and updates DOM

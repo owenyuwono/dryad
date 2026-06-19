@@ -33,6 +33,8 @@
 //                   and DROOP_BIAS_GAIN, applied additively to BOTH droop loops.
 // =============================================================================
 
+import { deriveTraits } from './allometry.js';
+
 // ---------------------------------------------------------------------------
 // Vector helpers (pure, no allocations needed for callers)
 // ---------------------------------------------------------------------------
@@ -459,10 +461,22 @@ export function solveProportions(graph, envelope, genome = null) {
     ? 1
     : WOODINESS_LOW + woodinessGene * (1 - WOODINESS_LOW);
 
+  // ALLOMETRY: girthScale ∝ sizeFactor^GIRTH_EXP makes a taller plant proportionally
+  // THICKER (real trunks obey ~diameter ∝ height^1.5) instead of stretching into a
+  // spindly reed. It multiplies the trunk base radius, so the pipe model propagates
+  // the thickening through every branch. Identity (×1.0) at default stature
+  // (trunkHeight=0.5 → sizeFactor=1), so radii are unchanged for default-height
+  // plants. stemGirth remains the manual slider — now a slenderness ratio ON TOP of
+  // this natural girth-for-height baseline. genome may be null for legacy callers.
+  const { girthScale } = deriveTraits(genome || {}, envelope);
+  // RIGIDITY→GIRTH COUPLING: real flexibility comes from slender stems, so a floppy
+  // plant (low rigidity) is also thinner — closing the audit's "floppy yet thick woody
+  // trunk" incoherence. Mild (range [0.85, 1.0]) so it nudges rather than dominates.
+  const rigidityGirthMod = 0.85 + rigidityGene * 0.15;
   const stemThicknessFactor = gravPow(gravity, 1 / 3) * stemMediumMod
                               * stemWindRadiusMod * stemAridRadiusMod
                               * succulenceStemMod * stemGirthMod
-                              * woodinessTrunkMod;
+                              * woodinessTrunkMod * girthScale * rigidityGirthMod;
   const stemBaseRadius      = 0.20 * stemThicknessFactor;
 
   // -------------------------------------------------------------------------
@@ -992,6 +1006,12 @@ export function solveProportions(graph, envelope, genome = null) {
       // Per-node weep angle, clamped to [0, π].
       const weepAngle = Math.min(Math.PI, weep * WEEP_MAX_PER_LEVEL * level);
       if (weepAngle < 1e-12) continue;
+
+      // STRAND THINNING: pendulous willow withes are slender, not stiff rods. Thin the
+      // weeping twig's radius proportional to weep and depth so cascading strands read
+      // as whippy rather than rigid (audit: weep kept full pipe-model radius). weep=0 →
+      // this whole pass is skipped, so non-weeping trees are byte-identical.
+      n.radius *= 1 - weep * 0.35 * Math.min(1, level / 3);
 
       // Anchor to the parent's ALREADY-WEEPED position for EVERY node, INCLUDING
       // terminals. Terminals must cascade with their drooping parent. Anchoring

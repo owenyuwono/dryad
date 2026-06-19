@@ -87,6 +87,8 @@ const EXPECTED_STRUCTURAL = [
   'stemSpread', 'rosette',
   // New inert gene (draw 44)
   'whorl',
+  // crownStart — where the crown's primary branches begin along the trunk
+  'crownStart',
 ];
 
 const EXPECTED_PROPORTIONS = [
@@ -104,12 +106,11 @@ const EXPECTED_PROPORTIONS = [
 ];
 
 const EXPECTED_COSMETIC = [
-  'pigment', 'leafSize', 'leafDensity', 'jitter', 'leafWidth',
-  'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
-  'barkColor', 'barkPattern',
-  'needleLeaf', 'leafScale', 'frondLeaf',
-  // trunkRings (draw 51)
-  'trunkRings',
+  'pigment', 'leafSize', 'jitter', 'leafWidth',
+  'leafLength', 'leafTip', 'leafSerration', 'leafLobing', 'leafSkew',
+  'barkHue', 'barkLightness', 'barkRelief', 'barkLenticels', 'barkScale', 'barkOrient', 'barkPlates',
+  'barkShed', 'barkUnderHue',
+  'leafDivision', 'frondFan',
   'structuralSeed',
 ];
 
@@ -125,7 +126,7 @@ const EXPECTED_RANGES = {
   tillering:        [0, 1],
   radialOrder:      [0, 1],
   appendageBreadth: [0, 1],
-  appendageDensity: [0, 1],
+  appendageDensity: [0, 1.5],
   segmentation:     [0, 1],
   succulence:       [0, 1],
   stemGirth:        [0, 1],
@@ -139,16 +140,23 @@ const EXPECTED_RANGES = {
   apicalBias:       [0.0, 1.0],
   droopBias:        [-0.2, 0.4],
   pigment:          [0.0, 1.0],
-  leafSize:         [0.6, 1.6],
-  leafDensity:      [0.5, 1.5],
+  leafSize:         [0.6, 4.0],
   jitter:           [0.0, 1.5],
   leafWidth:        [0.0, 1.0],
   leafLength:       [0.0, 1.0],
   leafTip:          [0.0, 1.0],
   leafSerration:    [0.0, 1.0],
   leafLobing:       [0.0, 1.0],
-  barkColor:        [0.0, 1.0],
-  barkPattern:      [0.0, 1.0],
+  leafSkew:         [0.0, 1.0],
+  barkHue:          [0.0, 1.0],
+  barkLightness:    [0.0, 1.0],
+  barkRelief:       [0.0, 1.0],
+  barkLenticels:    [0.0, 1.0],
+  barkScale:        [0.0, 1.0],
+  barkOrient:       [0.0, 1.0],
+  barkPlates:       [0.0, 1.0],
+  barkShed:         [0.0, 1.0],
+  barkUnderHue:     [0.0, 1.0],
   weep:             [0.0, 1.0],
   trunkHeight:      [0, 1],
   // Root system genes (added Task 1)
@@ -166,17 +174,15 @@ const EXPECTED_RANGES = {
   // New inert genes (draws 43–45)
   woodiness:        [0.0, 1.0],
   whorl:            [0, 1],
+  crownStart:       [0, 1],
   tipTuft:          [0.0, 1.0],
   // New inert genes (draws 46–48)
-  needleLeaf:       [0.0, 1.0],
-  leafScale:        [1.0, 3.0],
-  frondLeaf:        [0.0, 1.0],
+  leafDivision:     [0.0, 1.0],
+  frondFan:         [0.0, 1.0],
   // phototropism (draw 49)
   phototropism:     [0.0, 1.0],
   // trunkTaper (draw 50)
   trunkTaper:       [0.0, 1.0],
-  // trunkRings (draw 51)
-  trunkRings:       [0.0, 1.0],
 };
 
 // ---------------------------------------------------------------------------
@@ -327,17 +333,16 @@ describe('clampField — per-gene clamping', () => {
   // [0,1] range genes.
   const UNIT_GENES = [
     'branchiness', 'branchFactorN', 'tillering', 'radialOrder',
-    'appendageBreadth', 'appendageDensity', 'segmentation',
+    'appendageBreadth', 'segmentation',
     'trunkHeight',
     'succulence', 'stemGirth', 'taper', 'rigidity', 'verticality',
     'ribbing', 'spininess', 'apicalBias', 'pigment', 'leafWidth',
-    'leafLength', 'leafTip', 'leafSerration', 'leafLobing',
-    'barkColor', 'barkPattern', 'weep',
-    'woodiness', 'whorl', 'tipTuft',
-    'needleLeaf', 'frondLeaf',
+    'leafLength', 'leafTip', 'leafSerration', 'leafLobing', 'leafSkew',
+    'barkHue', 'barkLightness', 'barkRelief', 'barkLenticels', 'barkScale', 'barkOrient', 'barkPlates', 'barkShed', 'barkUnderHue', 'weep',
+    'woodiness', 'whorl', 'crownStart', 'tipTuft',
+    'leafDivision', 'frondFan',
     'phototropism',
     'trunkTaper',
-    'trunkRings',
   ];
 
   for (const field of UNIT_GENES) {
@@ -373,20 +378,21 @@ describe('clampField — per-gene clamping', () => {
     assert.equal(clampField(FLORA_SCHEMA, 'droopBias',  2),    0.4);
   });
 
-  it('leafSize: clamps to [0.6, 1.6] at probe inputs', () => {
+  it('leafSize: clamps to [0.6, 4.0] at probe inputs (widened — absorbed leafScale)', () => {
     assert.equal(clampField(FLORA_SCHEMA, 'leafSize', -1),   0.6);
     assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  0),   0.6);
     assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  0.5), 0.6); // 0.5 < 0.6 → lo
     assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  1),   1);
-    assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  2),   1.6);
+    assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  2),   2);   // within widened range
+    assert.equal(clampField(FLORA_SCHEMA, 'leafSize',  5),   4.0); // 5 > 4 → hi
   });
 
-  it('leafDensity: clamps to [0.5, 1.5] at probe inputs', () => {
-    assert.equal(clampField(FLORA_SCHEMA, 'leafDensity', -1),   0.5);
-    assert.equal(clampField(FLORA_SCHEMA, 'leafDensity',  0),   0.5);
-    assert.equal(clampField(FLORA_SCHEMA, 'leafDensity',  0.5), 0.5);
-    assert.equal(clampField(FLORA_SCHEMA, 'leafDensity',  1),   1);
-    assert.equal(clampField(FLORA_SCHEMA, 'leafDensity',  2),   1.5);
+  it('appendageDensity: clamps to [0, 1.5] at probe inputs (widened — absorbed leafDensity)', () => {
+    assert.equal(clampField(FLORA_SCHEMA, 'appendageDensity', -1),  0);
+    assert.equal(clampField(FLORA_SCHEMA, 'appendageDensity',  0),  0);
+    assert.equal(clampField(FLORA_SCHEMA, 'appendageDensity',  1),  1);
+    assert.equal(clampField(FLORA_SCHEMA, 'appendageDensity',  1.5), 1.5);
+    assert.equal(clampField(FLORA_SCHEMA, 'appendageDensity',  2),  1.5); // 2 > 1.5 → hi
   });
 
   it('jitter: clamps to [0.0, 1.5] at probe inputs', () => {

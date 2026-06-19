@@ -89,17 +89,18 @@ test('non-terminal bone: flatten=0 and normal=[0,1,0]', () => {
 });
 
 // ---------------------------------------------------------------------------
-// leafDensity flows through genome fields but does not affect flatten
+// leafSize flows through genome fields but does not affect flatten
+// (leafDensity was removed — folded into the single appendageDensity gene)
 // ---------------------------------------------------------------------------
 
-test('leafDensity is present in return value (flows to foliage system)', () => {
+test('leafSize is present in return value (flows to foliage system)', () => {
   const graph = makeGraph();
-  const genome = { appendageBreadth: 1, leafSize: 1, leafDensity: 0.5 };
+  const genome = { appendageBreadth: 1, leafSize: 1.3 };
   const result = skin(graph, envelope, genome);
-  // flatten is 0 regardless of leafDensity
+  // flatten is 0 regardless of leaf genes
   assert.strictEqual(getFlatW(result, 1), 0);
-  // leafDensity still returned for downstream foliage mesh system
-  assert.strictEqual(result.leafDensity, 0.5);
+  // leafSize still returned for downstream foliage mesh system
+  assert.strictEqual(result.leafSize, 1.3);
 });
 
 // ---------------------------------------------------------------------------

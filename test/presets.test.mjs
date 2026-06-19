@@ -243,27 +243,31 @@ describe('PRESETS — resolve is deterministic', () => {
 // Do NOT pin volatile fields (e.g. weight, radius, lightDir).
 // ---------------------------------------------------------------------------
 
+// Re-pinned after the rootButtress de-toggle: the old code force-floored buttress
+// wings to 2 whenever rootButtress>0.05; the fractional-crossfade version grows the
+// marginal wing in continuously, so low-rootButtress presets now have one fewer wing
+// (−2 root nodes each) and the last root tip moved. Counts/positions captured fresh.
 const GOLDEN_PINS = [
   {
     id:          'tree',
-    nodeCount:   932,
-    foliageCount: 6000,
+    nodeCount:   930,
+    foliageCount: 5843,
     firstPos:    [0, 0, 0],
-    lastPos:     [0.35994885449579733, -0.44102445881784047, -0.9467725210486077],
+    lastPos:     [-0.1449083694798573, -0.4095700446640988, -0.9531324667153409],
   },
   {
     id:          'oak',
-    nodeCount:   799,
-    foliageCount: 6000,
+    nodeCount:   797,
+    foliageCount: 5788,
     firstPos:    [0, 0, 0],
-    lastPos:     [0.4334222920319007, -0.21919066082878497, -0.08395010903297559],
+    lastPos:     [0.41823216791942225, -0.20050699041874406, 0.14056067401118064],
   },
   {
     id:          'birch',
-    nodeCount:   138,
-    foliageCount: 1897,
+    nodeCount:   292,
+    foliageCount: 2713,
     firstPos:    [0, 0, 0],
-    lastPos:     [0.406029672161544, -0.22890838100009409, -0.9378941162047706],
+    lastPos:     [0.198991360163432, -0.23777061638984287, -1.0641171716746396],
   },
 ];
 

@@ -41,6 +41,8 @@
 // No three.js import. Pure ESM. Node-testable.
 // =============================================================================
 
+import { deriveTraits } from './allometry.js';
+
 // ---------------------------------------------------------------------------
 // Exported constants
 // ---------------------------------------------------------------------------
@@ -234,10 +236,19 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
   // -------------------------------------------------------------------------
   const woodiness = genome.woodiness !== undefined ? genome.woodiness : 1.0;
 
-  /** Threshold below which no root system is grown at all. */
-  const WOODINESS_ROOT_THRESHOLD = 0.25;
+  // Root EXTENT ramps in continuously with woodiness instead of the old hard binary
+  // cliff at 0.25 (no roots ↔ full roots, with nothing between). woodinessRootScale
+  // smoothsteps 0→1 across [0.12, 0.30]: a herbaceous plant (woodiness < ~0.12, e.g.
+  // fern/kelp holdfasts) is still effectively rootless, a semi-woody one (cactus ~0.15)
+  // grows a small root system that scales up, and a fully woody one (>=0.30, all trees)
+  // is identity (×1.0). It multiplies rootScale below, so it scales the whole system's
+  // EXTENTS (not node counts), giving a smooth grow-in.
+  const _wt = Math.max(0, Math.min(1, (woodiness - 0.12) / (0.30 - 0.12)));
+  const woodinessRootScale = _wt * _wt * (3 - 2 * _wt);   // smoothstep
 
-  if (woodiness < WOODINESS_ROOT_THRESHOLD) {
+  // Below the ramp, roots would be ~zero size — skip building them (no visible cliff,
+  // since they've already faded to nothing by this point).
+  if (woodinessRootScale <= 0) {
     return graph;
   }
 
@@ -266,6 +277,17 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
 
   const maxRootBones = opts.maxRootBones !== undefined ? opts.maxRootBones : ROOT_BONE_BUDGET;
 
+  // ALLOMETRY: a bigger canopy needs a proportionally bigger anchor. rootScale ∝
+  // sizeFactor scales the root EXTENTS (taproot depth, lateral reach, buttress flare)
+  // with overall stature, so the root plate tracks the tree it supports instead of
+  // being a fixed footprint. Identity (×1.0) at default stature (trunkHeight=0.5), so
+  // default-height plants' roots are byte-identical. Segment COUNTS are unchanged
+  // (still gene-driven), so only positions scale — never the root bone count.
+  // rootScale = allometric stature scaling × continuous woodiness ramp (replaces the
+  // old binary woodiness<0.25 gate). At woodiness>=0.30 the ramp is 1.0 (identity).
+  const { rootScale: _allometricRootScale } = deriveTraits(genome);
+  const rootScale = _allometricRootScale * woodinessRootScale;
+
   // Counter for root bones appended in this call (separate from canopy budget)
   let rootBonesAdded = 0;
 
@@ -273,8 +295,8 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
   // Geometry parameters derived from genes
   // -------------------------------------------------------------------------
 
-  // Taproot: depth (world-units) and segment count
-  const taprootDepth    = (0.8 + rootDepth * 1.2 + aridBias * 0.6);    // 0.8..2.6
+  // Taproot: depth (world-units) and segment count. Depth scales with stature (rootScale).
+  const taprootDepth    = (0.8 + rootDepth * 1.2 + aridBias * 0.6) * rootScale;    // 0.8..2.6 × size
   const taprootSegs     = Math.max(3, Math.round(4 + rootDepth * 4));   // 4..8 segments
   const taprootSegLen   = taprootDepth / taprootSegs;
 
@@ -283,8 +305,8 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
   const fullLaterals  = Math.floor(fractLaterals);        // 2..6 full
   const lateralFrac   = fractLaterals - fullLaterals;     // 0.0..1.0 crossfade weight
 
-  // Lateral geometry
-  const spreadRadius   = 0.5 + rootSpread * 0.8 + windBias * 0.3;     // radial reach before diving
+  // Lateral geometry. Radial reach scales with stature (rootScale).
+  const spreadRadius   = (0.5 + rootSpread * 0.8 + windBias * 0.3) * rootScale;     // radial reach before diving
   const lateralSegs    = Math.max(3, Math.round(3 + rootSpread * 3));  // 3..6 segs outward
   const lateralSegLen  = spreadRadius / lateralSegs;
 
@@ -297,9 +319,14 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
   const taprootGeo    = 0.12;                              // taproot is already going down
   const lateralGeo    = 0.06 + rootDepth * 0.08;          // laterals gradually bend down
 
-  // Buttress parameters
-  const buttressCount  = rootButtress > 0.05 ? Math.max(2, Math.round(2 + rootButtress * 4)) : 0;
-  const buttressLen    = 0.10 + rootFlare * 0.35;          // above-ground flare length
+  // Buttress parameters — fractional-crossfade idiom (same as rootCount): the marginal
+  // wing grows in from zero LENGTH as rootButtress rises, instead of the old hard jump
+  // to 2 wings at 0.05 then integer 2→3→4 stepping. rootButtress=0 → no wings (clean).
+  const fractButtress  = rootButtress * 6;                 // 0..6 wings
+  const fullButtress   = Math.floor(fractButtress);
+  const buttressFrac   = fractButtress - fullButtress;     // crossfade weight for the +1 wing
+  const buttressCount  = fullButtress + (buttressFrac > 0 ? 1 : 0);
+  const buttressLen    = (0.10 + rootFlare * 0.35) * rootScale;          // above-ground flare length × size
   const buttressSegs   = 2;                                // short 2-segment wings
 
   // -------------------------------------------------------------------------
@@ -349,7 +376,10 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
 
       // Buttress direction: outward and slightly upward from the trunk base
       const buttressDir = norm3([Math.cos(az) * 0.85, 0.15, Math.sin(az) * 0.85]);
-      const buttressSegLen = buttressLen / buttressSegs;
+      // Crossfade wing (the last one) grows in by LENGTH (proportions owns the radius,
+      // so length is the effective grow-in): scale its segment length by buttressFrac.
+      const wWeight = (b === fullButtress && buttressFrac > 0) ? buttressFrac : 1.0;
+      const buttressSegLen = (buttressLen / buttressSegs) * wWeight;
 
       // Place buttress segments — these stay near/above ground (pos[1] ≥ 0)
       let pos = origin;
@@ -363,8 +393,8 @@ export function growRootSystem(graph, genome, rootRng, opts = {}) {
         const idx = nodes.length;
         nodes.push({
           pos: [...pos],
-          radius: 0.04 + rootFlare * 0.06,  // placeholder
-          weight: 1.0,
+          radius: 0.04 + rootFlare * 0.06,  // placeholder (proportions overwrites)
+          weight: wWeight,
           isRoot: true,
           branchLevel: 0,
           rootLevel: 0,

@@ -42,7 +42,7 @@
 // =============================================================================
 
 import * as THREE from 'three';
-import { MAX_LEAVES } from './foliage.js';
+import { MAX_LEAVES, LEAVES_PER_CLUMP } from './foliage.js';
 import {
     WIND_BONE_UNIFORM_DECLS,
     WIND_BONE_FETCH_GLSL,
@@ -55,6 +55,26 @@ import {
 // ---------------------------------------------------------------------------
 
 export { MAX_LEAVES };
+
+// Instance capacity: each clump anchor (≤ MAX_LEAVES) is fanned into up to
+// LEAVES_PER_CLUMP single-leaf cards by expandClumpsToLeaves, so the mesh and
+// all per-instance buffers must hold MAX_LEAVES × LEAVES_PER_CLUMP instances.
+export const LEAF_CAPACITY = MAX_LEAVES * LEAVES_PER_CLUMP;
+
+// Gravity bend: every leaf card curves toward world-down, the tip drooping by
+// this fraction of the leaf's world length (quadratic from base→tip). Applied
+// in the vertex shader (see the project_vertex hook). 0 = flat cards.
+export const LEAF_BEND_DEFAULT = 0.45;
+
+// Leaf normal-map strength. The fragment shader blends the surface normal ~80%
+// toward the canopy sphere normal, so the tangent-space vein/midrib relief is
+// amplified here to stay visible after that blend.
+export const LEAF_NORMAL_SCALE = 2.5;
+
+// Vertices along the leaf's length. The gravity bend is quadratic in position.y,
+// so the blade needs several rows between base and tip to read as a smooth CURVE
+// rather than a single-quad tilt. 6 is plenty smooth and cheap (one draw call).
+export const LEAF_LENGTH_SEGMENTS = 6;
 
 // ---------------------------------------------------------------------------
 // INTERNAL — orthonormal basis construction
@@ -152,8 +172,13 @@ export function createLeafMesh() {
   // Geometry — 1×1 quad, base at Y=0, tip at Y=1.
   // PlaneGeometry(1,1) has vertices at Y ∈ [-0.5, 0.5]; shift by +0.5 so
   // the base sits at origin and the tip is at Y=1.
+  //
+  // SUBDIVIDED ALONG THE LENGTH (heightSegments = LEAF_LENGTH_SEGMENTS): the
+  // gravity-bend vertex shader displaces each vertex by position.y² — with only
+  // the 4 corners of a single quad that just lowers the top edge (a flat tilt),
+  // so the blade must have intermediate rows of vertices to actually CURVE.
   // ---------------------------------------------------------------------------
-  const geometry = new THREE.PlaneGeometry(1, 1);
+  const geometry = new THREE.PlaneGeometry(1, 1, 1, LEAF_LENGTH_SEGMENTS);
 
   // Shift vertices so base = (Y=0) and tip = (Y=1)
   const pos = geometry.attributes.position;
@@ -164,11 +189,16 @@ export function createLeafMesh() {
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 
+  // Gravity-bend strength (tip droop as a fraction of leaf length). Mutable via
+  // setLeafBend(); the uniform refs are captured in onBeforeCompile below.
+  let _leafBend = LEAF_BEND_DEFAULT;
+
   // ---------------------------------------------------------------------------
   // Material — MeshStandardMaterial with onBeforeCompile.
   //
   // PBR base:
-  //   roughness 0.7 / metalness 0.0 — diffuse-dominant, matte leaf surface.
+  //   roughness 0.88 / metalness 0.0 — matte, diffuse-dominant leaf (avoids a glossy/
+  //     plastic specular sheen under the sun + IBL; raise toward 1.0 for fully matte).
   //   alphaTest 0.5 — cutout alpha; no transparent blending, no depth sorting.
   //   side: DoubleSide — both faces rendered; back-face normal flip handled in
   //     onBeforeCompile rather than relying on Two-Pass rendering.
@@ -189,7 +219,7 @@ export function createLeafMesh() {
     map:       null,
     alphaTest: 0.5,
     side:      THREE.DoubleSide,
-    roughness: 0.7,
+    roughness: 0.88,
     metalness: 0.0,
   });
 
@@ -218,6 +248,7 @@ varying float vExposure;
 varying vec3 vInstanceColor;
 attribute vec3 aCanopyNormal;
 varying vec3 vCanopyNormal;
+uniform float uLeafBend;
 #include <common>
 `
     );
@@ -314,7 +345,17 @@ vCanopyNormal = aCanopyNormal;
 #include <project_vertex>
 #ifdef USE_INSTANCING
   vec3 followDelta = windBoneFollowDelta(leafWorldAnchor, aBoneIndex);
-  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta, 0.0));
+  // GRAVITY BEND: curve every leaf blade toward world-down. The droop grows
+  // quadratically from the base (position.y=0 → 0) to the tip (position.y=1),
+  // scaled to the leaf's world size (length of the tangent column of
+  // instanceMatrix). Applied as a WORLD-space delta in view space (post-
+  // instanceMatrix) so it always points at gravity regardless of how the leaf
+  // is oriented — adding it pre-instance would let the leaf rotation warp the
+  // down vector into another direction (the warp trap).
+  float leafLen = length(instanceMatrix[1].xyz);
+  float bendDroop = position.y * position.y * leafLen * uLeafBend;
+  vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
+  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));
 #endif
 `
     );
@@ -339,6 +380,9 @@ varying vec3 vCanopyNormal;
     );
     shader.uniforms.uLightDir = { value: new THREE.Vector3(0.5, 1.0, 0.5).normalize() };
     shader.uniforms.uWeep     = { value: 0.0 };
+    // Gravity-bend strength: tip droop as a fraction of the leaf's world length.
+    shader.uniforms.uLeafBend = { value: _leafBend };
+    material._leafBendUniform = shader.uniforms.uLeafBend;
 
     // Wind uniforms — added to shader.uniforms so they are uploaded each frame.
     // uBoneTex and uBoneCount are wired by viewer.js (Task 5) after buildBranchGeometry.
@@ -477,6 +521,7 @@ outgoingLight = outgoingLight * shadowMul + sunliftAdd + backlitGlow;
       '#include <common>',
       WIND_BONE_UNIFORM_DECLS + WIND_BONE_FETCH_GLSL + WIND_LEAF_FOLLOW_GLSL + /* glsl */`
 attribute float aBoneIndex;
+uniform float uLeafBend;
 #include <common>
 `
     );
@@ -509,14 +554,18 @@ attribute float aBoneIndex;
 `
     );
 
-    // 3. Bone-follow in view space — same pattern as main material.
+    // 3. Bone-follow + gravity bend in view space — same pattern as main material
+    //    so the shadow silhouette matches the drooped leaf.
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
       /* glsl */`
 #include <project_vertex>
 #ifdef USE_INSTANCING
   vec3 followDelta = windBoneFollowDelta(leafWorldAnchor, aBoneIndex);
-  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta, 0.0));
+  float leafLen = length(instanceMatrix[1].xyz);
+  float bendDroop = position.y * position.y * leafLen * uLeafBend;
+  vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
+  gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));
 #endif
 `
     );
@@ -531,13 +580,16 @@ attribute float aBoneIndex;
       uBoneCount:    { value: WIND_BONE_UNIFORM_DEFAULTS.uBoneCount },
     };
     Object.assign(shader.uniforms, depthWindUniforms);
+    shader.uniforms.uLeafBend = { value: _leafBend };
+    depthMaterial._leafBendUniform = shader.uniforms.uLeafBend;
     depthMaterial._windUniforms = depthWindUniforms;
   };
 
   // ---------------------------------------------------------------------------
-  // InstancedMesh — allocated once for MAX_LEAVES instances
+  // InstancedMesh — allocated once for LEAF_CAPACITY instances (clump anchors
+  // fanned into single-leaf cards by expandClumpsToLeaves).
   // ---------------------------------------------------------------------------
-  const mesh = new THREE.InstancedMesh(geometry, material, MAX_LEAVES);
+  const mesh = new THREE.InstancedMesh(geometry, material, LEAF_CAPACITY);
   mesh.count = 0;             // nothing drawn until update() is called
   mesh.frustumCulled = false; // individual leaf instances span the plant; skip per-mesh cull
 
@@ -549,7 +601,7 @@ attribute float aBoneIndex;
   // Pre-initialise all instance matrices to identity (avoids NaN artifacts on
   // instances beyond mesh.count if the GPU reads them anyway)
   const identity = new THREE.Matrix4();
-  for (let i = 0; i < MAX_LEAVES; i++) {
+  for (let i = 0; i < LEAF_CAPACITY; i++) {
     mesh.setMatrixAt(i, identity);
   }
   mesh.instanceMatrix.needsUpdate = true;
@@ -558,7 +610,7 @@ attribute float aBoneIndex;
   // setColorAt forces InstancedMesh to create the instanceColor attribute,
   // which onBeforeCompile reads via USE_INSTANCING_COLOR / instanceColor.
   const white = new THREE.Color(1, 1, 1);
-  for (let i = 0; i < MAX_LEAVES; i++) {
+  for (let i = 0; i < LEAF_CAPACITY; i++) {
     mesh.setColorAt(i, white);
   }
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -572,7 +624,7 @@ attribute float aBoneIndex;
   // The attribute name 'aExposure' is declared in the vertex shader via
   // onBeforeCompile and passed through to the fragment as vExposure.
   // ---------------------------------------------------------------------------
-  const _exposureData = new Float32Array(MAX_LEAVES).fill(1.0);
+  const _exposureData = new Float32Array(LEAF_CAPACITY).fill(1.0);
   const exposureAttr  = new THREE.InstancedBufferAttribute(_exposureData, 1);
   geometry.setAttribute('aExposure', exposureAttr);
 
@@ -585,9 +637,9 @@ attribute float aBoneIndex;
   // flat independent patches.  Computed in update() from the AABB center of
   // all instance positions.  Defaults to (0,1,0) until update() is called.
   // ---------------------------------------------------------------------------
-  const _canopyNormalData = new Float32Array(MAX_LEAVES * 3);
+  const _canopyNormalData = new Float32Array(LEAF_CAPACITY * 3);
   // Default to up-vector (y=1, x=z=0)
-  for (let ci = 0; ci < MAX_LEAVES; ci++) { _canopyNormalData[ci * 3 + 1] = 1.0; }
+  for (let ci = 0; ci < LEAF_CAPACITY; ci++) { _canopyNormalData[ci * 3 + 1] = 1.0; }
   const canopyNormalAttr  = new THREE.InstancedBufferAttribute(_canopyNormalData, 3);
   geometry.setAttribute('aCanopyNormal', canopyNormalAttr);
 
@@ -603,7 +655,7 @@ attribute float aBoneIndex;
   // is isRigid and produces identity rotation) so the shader is safe when
   // foliage.js supplies no boneIndex or before viewer.js calls update().
   // ---------------------------------------------------------------------------
-  const _boneIndexData = new Float32Array(MAX_LEAVES); // default 0
+  const _boneIndexData = new Float32Array(LEAF_CAPACITY); // default 0
   const boneIndexAttr  = new THREE.InstancedBufferAttribute(_boneIndexData, 1);
   geometry.setAttribute('aBoneIndex', boneIndexAttr);
 
@@ -776,12 +828,38 @@ attribute float aBoneIndex;
      *
      * @param {THREE.Texture} texture
      */
-    setTexture(texture) {
+    setTexture(texture, normalTexture) {
       material.map = texture;
       if (texture) texture.colorSpace = THREE.SRGBColorSpace;
       depthMaterial.map = texture;
+      if (normalTexture !== undefined) {
+        material.normalMap = normalTexture || null;
+        if (normalTexture) {
+          // Normal maps are data, not colour — must be sampled linearly.
+          normalTexture.colorSpace = THREE.NoColorSpace;
+          // Amplify so the vein/midrib relief survives the canopy-sphere normal
+          // blend in the fragment shader (which pulls ~80% toward the sphere normal).
+          if (!material.normalScale) material.normalScale = new THREE.Vector2(1, 1);
+          material.normalScale.set(LEAF_NORMAL_SCALE, LEAF_NORMAL_SCALE);
+        }
+      }
       depthMaterial.needsUpdate = true;
       material.needsUpdate = true;
+    },
+
+    /**
+     * setLeafBend(amount)
+     *
+     * Global gravity-droop strength: tip droop as a fraction of leaf length
+     * (0 = flat cards, higher = more downward curve). Updates the uniform on
+     * both the lit and shadow-depth materials. No recompile.
+     *
+     * @param {number} amount
+     */
+    setLeafBend(amount) {
+      _leafBend = amount;
+      if (material._leafBendUniform)       material._leafBendUniform.value = amount;
+      if (depthMaterial._leafBendUniform)  depthMaterial._leafBendUniform.value = amount;
     },
 
     /**

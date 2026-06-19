@@ -81,11 +81,16 @@ export const FLORA_SCHEMA = Object.freeze({
     range: Object.freeze([0, 1]),
   }),
 
-  /** Appendage packing density along a stem; 0 = sparse, 1 = densely clad. */
+  /**
+   * Appendage packing density along a stem; 0 = sparse → 1.5 = densely clad.
+   * SINGLE canonical foliage-density gene: the former cosmetic `leafDensity` (a pure
+   * product with this one) was removed and folded in here, so the range was widened
+   * to [0, 1.5] to absorb its high end.
+   */
   appendageDensity: Object.freeze({
     tier: 'structural',
     kind: 'continuous',
-    range: Object.freeze([0, 1]),
+    range: Object.freeze([0, 1.5]),
   }),
 
   /** Degree of articulation / segmentation along stems; 0 = smooth, 1 = highly segmented. */
@@ -131,6 +136,18 @@ export const FLORA_SCHEMA = Object.freeze({
    * Structural tier — no consumer wired yet. Draw 44. IDENTITY DEFAULT = 0.
    */
   whorl: Object.freeze({
+    tier: 'structural',
+    kind: 'continuous',
+    range: Object.freeze([0, 1]),
+  }),
+
+  /**
+   * crownStart — where the crown's primary branches begin along the trunk.
+   * 1.0 = IDENTITY (branches fork only at the trunk top/peak — palm); lower values
+   * also emit primary branches down to crownStart·trunkHeight, so the crown starts
+   * lower (birch/most broadleaves). Structural — consumed by skeleton.js (non-whorl).
+   */
+  crownStart: Object.freeze({
     tier: 'structural',
     kind: 'continuous',
     range: Object.freeze([0, 1]),
@@ -292,18 +309,16 @@ export const FLORA_SCHEMA = Object.freeze({
     range: Object.freeze([0.0, 1.0]),
   }),
 
-  /** Appendage (leaf/blade) scale multiplier. */
+  /**
+   * Appendage (leaf/blade/cluster) scale multiplier — the SINGLE canonical leaf-size
+   * gene. The former cosmetic `leafScale` (a pure product with this one, used for big
+   * palm/banana fronds) was removed and folded in here, so the range was widened to
+   * [0.6, 4.0] to cover everything from a small leaf to a giant frond.
+   */
   leafSize: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
-    range: Object.freeze([0.6, 1.6]),
-  }),
-
-  /** Appendage count / coverage per attachment site. */
-  leafDensity: Object.freeze({
-    tier: 'cosmetic',
-    kind: 'continuous',
-    range: Object.freeze([0.5, 1.5]),
+    range: Object.freeze([0.6, 4.0]),
   }),
 
   /** Positional noise applied to each attachment point. */
@@ -364,61 +379,133 @@ export const FLORA_SCHEMA = Object.freeze({
   }),
 
   /**
-   * Bark base colour: 0 = white/cream (birch lenticels) → 1 = dark brown.
-   * Cosmetic only — barkMaterial consumer. Draw 36.
+   * Leaf SKEW — position of the widest point along the blade (base↔tip).
+   * 0.5 = symmetric ovate (IDENTITY no-op). <0.5 = widest toward the BASE with an
+   * acuminate drawn-out tip (ovate — birch & most broadleaves); >0.5 = widest toward
+   * the tip (obovate). Cosmetic — drives the leaf silhouette via leafBaseParams.
    */
-  barkColor: Object.freeze({
+  leafSkew: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  // ---------------------------------------------------------------------------
+  // BARK — orthogonal morphological axes (replaced the old `barkColor`/`barkPattern`
+  // pair, which was a 1-D birch↔oak crossfade with features welded to each end).
+  // Each of these is one real, independent degree of freedom; a "birch" or "oak"
+  // look is just a point in this 5-D space, not a type. All cosmetic, barkMaterial.
+  // ---------------------------------------------------------------------------
+
+  /** Bark hue/warmth: 0 = neutral grey, 1 = saturated warm brown/red. */
+  barkHue: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /** Bark lightness: 0 = near-black, 1 = pale/white (birch). Independent of hue. */
+  barkLightness: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /** Furrow depth: 0 = smooth, 1 = deeply furrowed (drives relief, cracks, roughness). */
+  barkRelief: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /** Lenticel (horizontal dash) density: 0 = none, 1 = dense. Independent of color/furrow. */
+  barkLenticels: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /** Plate/furrow scale: 0 = coarse plates, 1 = fine plates (rib + crack frequency). */
+  barkScale: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),
   }),
 
   /**
-   * Bark surface pattern: 0 = smooth + lenticels → 1 = deeply furrowed.
-   * Cosmetic only — barkMaterial consumer. Draw 37.
+   * barkOrient — crack/ridge ORIENTATION, the unifying axis that absorbed the old
+   * barkGrain (vertical-fiber corner) AND trunkRings (horizontal-ring pole):
+   *   0   = horizontal rings / girdling bands (palm leaf-scars, bamboo nodes)
+   *   0.5 ≈ isotropic reticulate net (ash / walnut diamond bark)
+   *   1   = vertical furrows + longitudinal fibers (oak, redwood, stringybark)
+   * Drives an anisotropic rescale of the sampling coordinate feeding BOTH the ridged
+   * FBM relief and the voronoi plate cracks. Cosmetic — barkMaterial only.
+   * IDENTITY DEFAULT = 0.70 (reproduces the legacy vertical BARK_Y_STRETCH=3.0 exactly;
+   * asymmetric because the legacy bark is vertically biased, not isotropic).
    */
-  barkPattern: Object.freeze({
+  barkOrient: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),
   }),
 
   /**
-   * Needle-leaf morphology: 0 = no-op (broad leaf), 1 = needle-like leaf shape.
-   * Cosmetic only — no consumer wired yet. Draw 46. IDENTITY DEFAULT = 0.
+   * barkPlates — relief MORPHOLOGY blend: 0 = continuous flowing ridges/furrows (oak,
+   * redwood), 1 = discrete polygonal plates / flaking scales (pine, alligator juniper).
+   * Drives the voronoi crack depth fed consistently to the normal relief AND the albedo
+   * crack mask. Cosmetic — barkMaterial only. IDENTITY DEFAULT = 0.45 (legacy crack depth).
    */
-  needleLeaf: Object.freeze({
+  barkPlates: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),
   }),
 
   /**
-   * Leaf cluster scale multiplier; 1.0 = identity (no change), 3.0 = 3× scale.
-   * Cosmetic only — no consumer wired yet. Draw 47. IDENTITY DEFAULT = 1.0.
+   * barkShed — EXFOLIATION / peel: 0 = intact bark (identity no-op), 1 = strong shedding
+   * that reveals fresh under-bark in coarse organic patches (London plane / sycamore /
+   * eucalyptus camouflage, birch papery curls; with high barkOrient → fibrous strand-peel).
+   * Patch edges lift (gated by barkRelief). Cosmetic — barkMaterial only. IDENTITY = 0.
    */
-  leafScale: Object.freeze({
-    tier: 'cosmetic',
-    kind: 'continuous',
-    range: Object.freeze([1.0, 3.0]),
-  }),
-
-  /**
-   * Frond-leaf morphology: 0 = no-op (current broadleaf sprite), 1 = palm-frond leaf sprite.
-   * Cosmetic only — no consumer wired yet. Draw 48. IDENTITY DEFAULT = 0.
-   */
-  frondLeaf: Object.freeze({
+  barkShed: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),
   }),
 
   /**
-   * Horizontal leaf-scar ring banding on palm trunks; 0 = no-op (identity — current bark),
-   * 1 = fully visible ring bands. Cosmetic only — barkMaterial consumer. Draw 51.
-   * IDENTITY DEFAULT = 0 → bark byte-identical to pre-gene output.
+   * barkUnderHue — hue of the fresh under-bark revealed by shedding; only active when
+   * barkShed > 0. 0 = grey, 1 = saturated warm. Defaults near barkHue (0.75) so a peel is
+   * near-monochrome until dialed away (then: plane green/cream, eucalyptus, cinnamon paperbark).
+   * Cosmetic — barkMaterial only.
    */
-  trunkRings: Object.freeze({
+  barkUnderHue: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Leaf DIVISION — the single orthogonal "leaf form" axis that replaced the old
+   * discrete needleLeaf + frondLeaf switches:
+   *   0 = simple undivided blade (a NEEDLE is just this with a very narrow leafWidth);
+   *   1 = fully compound / divided into leaflets (a FROND).
+   * Combined with leafWidth (narrowness) and frondFan (leaflet fan↔feather) it spans
+   * broadleaf ↔ needle ↔ frond continuously. Cosmetic. Draw 46. IDENTITY DEFAULT = 0.
+   */
+  leafDivision: Object.freeze({
+    tier: 'cosmetic',
+    kind: 'continuous',
+    range: Object.freeze([0.0, 1.0]),
+  }),
+
+  /**
+   * Frond division axis: 0 = pinnate/feather (leaflets along a long rachis — coconut,
+   * date palm), 1 = palmate/fan (rachis collapses to a petiole, leaflets radiate from the
+   * base — Washingtonia / fan palm). Continuous morph between the two. Cosmetic only —
+   * drives the leaf-cluster texture (drawPalmFrond). IDENTITY DEFAULT = 0 (feather).
+   */
+  frondFan: Object.freeze({
     tier: 'cosmetic',
     kind: 'continuous',
     range: Object.freeze([0.0, 1.0]),

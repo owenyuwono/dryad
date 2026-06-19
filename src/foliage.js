@@ -31,6 +31,7 @@
 // =============================================================================
 
 import { mulberry32 } from './rng.js';
+import { deriveTraits } from './allometry.js';
 
 // ---------------------------------------------------------------------------
 // Public constants — exposed for tuning and tests.
@@ -43,8 +44,20 @@ import { mulberry32 } from './rng.js';
  */
 export const SPINE_SALT = 0x5B1E5B1E;
 
-/** Maximum cluster instances allocated (hard budget). */
+/** Maximum cluster (anchor) instances allocated (hard budget). */
 export const MAX_LEAVES = 6000;
+
+/**
+ * Single-leaf expansion factor: each broadleaf CLUMP anchor produced by
+ * generateFoliage is fanned into this many individual single-leaf cards by
+ * expandClumpsToLeaves (the render-path "one leaf = one card" model). Fronds,
+ * needle fascicles, and spiny stems are NOT expanded (their sprite is already a
+ * whole unit) — see the gate in expandClumpsToLeaves.
+ */
+export const LEAVES_PER_CLUMP = 6;
+
+/** Salt for the isolated RNG stream that fans clump anchors into leaves. */
+export const LEAF_FAN_SALT = 0x1EAF0FA2;
 
 /**
  * Base clusters-per-segment before density scaling.
@@ -288,16 +301,14 @@ export function generateFoliage(graph, genome, opts) {
   // -------------------------------------------------------------------------
   // Genome genes with safe defaults.
   // -------------------------------------------------------------------------
+  // appendageDensity is the SINGLE foliage-density gene (former leafDensity folded in;
+  // range widened to [0,1.5]). leafSize is the SINGLE leaf-size gene (former leafScale
+  // folded in; range widened to [0.6,4.0]) — big palm/banana fronds come from a high
+  // leafSize, not a separate multiplier.
   const appendageDensity = genome.appendageDensity !== undefined ? genome.appendageDensity : 0.4;
-  const leafDensity      = genome.leafDensity      !== undefined ? genome.leafDensity      : 1.0;
   const leafSize         = genome.leafSize          !== undefined ? genome.leafSize          : 1.1;
   const appendageBreadth = genome.appendageBreadth !== undefined ? genome.appendageBreadth : 0.45;
   const radialOrder      = genome.radialOrder      !== undefined ? genome.radialOrder      : 0.25;
-
-  // leafScale ∈ [1.0, 3.0], identity 1.0: multiplies per-cluster card size.
-  // At leafScale=1.0 this is a strict no-op (×1.0) so the SoA is byte-identical
-  // to the pre-leafScale baseline. No rng draws are consumed by this read.
-  const leafScale = genome.leafScale ?? 1.0;
 
   // weep ∈ [0,1]: 0 = no-op (normal orientation), 1 = leaves hang straight down.
   // Strict no-op at weep=0 — the blend block below is skipped entirely via guard.
@@ -309,6 +320,32 @@ export function generateFoliage(graph, genome, opts) {
   // so the SoA output is byte-identical to the pre-tipTuft baseline.
   // NOTE: Only WHERE clusters sit changes — not how many rng() draws happen.
   const tipTuft = genome.tipTuft ?? 0;
+
+  // Frondy plants — needle conifers, compound-frond palms, and rosette crowns
+  // (fern/banana/palm) — clothe their branches with foliage ALONG the whole shaft
+  // and need EVEN top-to-bottom coverage. The default broadleaf path tip-weights
+  // clusters and probabilistically bares inner branches (sky gaps) — right for a
+  // deciduous crown, but it leaves conifer spires and palm rachises bare and starves
+  // the upper crown once the budget is hit ("dense bottom whorl, bald top" bug).
+  // frondyness CONTINUOUSLY blends the distribution from broadleaf (tip-weighted,
+  // sky-gaps) toward even shaft coverage. It now derives from the merged leaf model:
+  //   leafDivision (compound/frond) → clothe the shaft;
+  //   narrow leafWidth (a needle)   → clothe the shaft (narrowFactor);
+  //   rosette                       → apical frond crown.
+  // = 0 for every broadleaf preset / TREE_DEFAULT (leafDivision 0, leafWidth wide,
+  // rosette 0), so all blends collapse to the exact broadleaf path (byte-identical).
+  const leafDivision = genome.leafDivision ?? 0;
+  const rosette      = genome.rosette      ?? 0;
+  const leafWidthG   = genome.leafWidth    ?? 0.5;
+  const narrowFactor = Math.max(0, Math.min(1, (0.30 - leafWidthG) / 0.30)); // 1 at leafWidth→0 (needle)
+  const frondyness = Math.max(0, Math.min(1, Math.max(leafDivision, rosette, narrowFactor)));
+
+  // ALLOMETRY: leafAreaScale ∝ sizeFactor^LEAF_AREA_EXP grows leaf-cluster cards
+  // mildly with overall stature, so a tall plant's crown reads as a solid volume
+  // instead of sparse same-size confetti scattered on long branches. Identity (×1.0)
+  // at default stature (trunkHeight=0.5 → sizeFactor=1) → byte-identical card size
+  // for default-height plants. Applied per-cluster in writeCluster via closure.
+  const { leafAreaScale } = deriveTraits(genome);
 
   // -------------------------------------------------------------------------
   // Separate deterministic RNG stream — NEVER touches the skeleton stream.
@@ -380,6 +417,19 @@ export function generateFoliage(graph, genome, opts) {
   const apicalReserve = Math.min(terminalSegmentCount * APICAL_CLUSTER, MAX_LEAVES);
   const bodyBudget    = MAX_LEAVES - apicalReserve;
 
+  // Frondy even-coverage budget: spread ~90% of the body budget across ALL eligible
+  // segments, weighted like tipBoost (outer branches a touch denser), so the total
+  // never exhausts the budget mid-iteration (which would drain it onto the bottom of
+  // the crown and leave the top bald). The per-segment value is further capped by the
+  // normal density in the loop, so few-segment crowns (palm: a dozen long fronds)
+  // don't over-saturate into giant blobs. Gated on frondyness > 0 → zero cost for broadleaf.
+  let frondyPerSegBase = 0;
+  if (frondyness > 0 && segments.length > 0) {
+    let weightSum = 0;
+    for (const s of segments) weightSum += 1 + 0.5 * s.node.branchLevel;
+    frondyPerSegBase = (bodyBudget * 0.90) / Math.max(weightSum, 1);
+  }
+
   // -------------------------------------------------------------------------
   // Shared helper: write one cluster into the SoA at position `count`.
   // Consumes 9 rng draws per cluster (sizeJitter, jitter, azJitter, radialPush,
@@ -396,13 +446,12 @@ export function generateFoliage(graph, genome, opts) {
 
     // SIZE
     const sizeJitter   = 1.0 + (rng() - 0.5) * 2.0 * SIZE_JITTER;
-    const nodeWeight   = node.weight !== undefined ? node.weight : 1.0;
-    // Leaf size is a uniform species size (genome.leafSize) — NOT scaled by branch
-    // thickness. Real leaves are the same size on a fine twig as on a thick branch,
-    // and they live mostly on the fine twigs, so scaling them down there was backwards.
-    // leafScale multiplies the final card size (palm/tropical big-frond multiplier).
-    // At leafScale=1.0 this is a strict no-op (×1.0) — SoA byte-identical to baseline.
-    const clusterScale = LEAF_BASE * leafSize * (0.6 + 0.4 * appendageBreadth) * sizeJitter * nodeWeight * leafScale;
+    // Leaf size is a UNIFORM species size (genome.leafSize) — it is NOT scaled by
+    // the twig's crossfade weight (node.weight) any more. A thin / growing-in twig
+    // keeps full-size leaves; its DENSITY (cluster count) is reduced instead — see
+    // the body pass, which scales clustersPerSeg by node.weight. leafAreaScale is
+    // the allometry term (∝ sizeFactor^0.5) so a tall crown reads as a volume.
+    const clusterScale = LEAF_BASE * leafSize * (0.6 + 0.4 * appendageBreadth) * sizeJitter * leafAreaScale;
 
     // CANOPY ENVELOPE JITTER
     const jitter = (rng() - 0.5) * 2.0 * JITTER_FRAC * segLen;
@@ -421,21 +470,15 @@ export function generateFoliage(graph, genome, opts) {
     const perp      = perpTo(axis);
     const radialDir = rotate3(perp, axis, azFinal);
 
-    // VOLUMETRIC CROWN FILL
-    const radialPush = midRadius + rng() * RADIAL_OFFSET_FRAC * clusterScale;
-
-    const jPhi  = rng() * Math.PI * 2;
-    const jCosT = (rng() - 0.5) * 2.0;
-    const jSinT = Math.sqrt(Math.max(0, 1 - jCosT * jCosT));
-    const jDirX = jSinT * Math.cos(jPhi);
-    const jDirY = jCosT;
-    const jDirZ = jSinT * Math.sin(jPhi);
-    const volJit = rng() * VOLUME_JITTER_FRAC * clusterScale;
-
+    // EMBEDDED PIVOT — the leaf base sits ON the branch/twig surface (radius =
+    // midRadius), never floating in the canopy volume. Crown volume comes from
+    // the blade leaning OUTWARD/up from this anchor (clusterTangent below), not
+    // from displacing the base off the wood. Along-twig spread is already provided
+    // by the t-positions + the jPos axial jitter above.
     const clusterBase = [
-      jPos[0] + radialDir[0] * radialPush + jDirX * volJit,
-      jPos[1] + radialDir[1] * radialPush + jDirY * volJit,
-      jPos[2] + radialDir[2] * radialPush + jDirZ * volJit,
+      jPos[0] + radialDir[0] * midRadius,
+      jPos[1] + radialDir[1] * midRadius,
+      jPos[2] + radialDir[2] * midRadius,
     ];
 
     // UPWARD/OUTWARD LEAN
@@ -571,7 +614,20 @@ export function generateFoliage(graph, genome, opts) {
     // Outer segments (higher branchLevel) get more.
     // -----------------------------------------------------------------------
     const tipBoost = 1 + 0.5 * node.branchLevel;
-    const clustersPerSeg = Math.round(BASE_DENSITY * appendageDensity * leafDensity * tipBoost);
+    const normalPerSeg = Math.round(BASE_DENSITY * appendageDensity * tipBoost);
+    // Frondy even budget-fair share (keeps the whole crown clothed), capped by normal
+    // density so palm's few fronds don't over-saturate, floored at 2 so the shaft is
+    // never bare. CONTINUOUS blend toward it by frondyness; at frondyness=0 the guard
+    // returns exactly normalPerSeg (byte-identical broadleaf).
+    const frondyShare = Math.max(2, Math.min(Math.round(frondyPerSegBase * tipBoost), normalPerSeg));
+    const clustersPerSegBase = frondyness <= 0
+      ? normalPerSeg
+      : Math.round(normalPerSeg + (frondyShare - normalPerSeg) * frondyness);
+    // DENSITY ∝ twig crossfade weight: a thin / growing-in twig (node.weight < 1)
+    // carries FEWER leaves rather than smaller ones (leaf size is now uniform — see
+    // writeCluster). Established branches have weight 1 → unchanged.
+    const segWeight = node.weight !== undefined ? node.weight : 1.0;
+    const clustersPerSeg = Math.round(clustersPerSegBase * segWeight);
     const bodyToPlace    = Math.min(Math.max(0, clustersPerSeg), bodyBudget - count);
 
     // Consume gate rng for determinism (always, even if bodyToPlace=0).
@@ -592,10 +648,14 @@ export function generateFoliage(graph, genome, opts) {
     let segmentIsActive;
     if (node.isTerminal) {
       segmentIsActive = true;
-    } else if (node.branchLevel < OUTER_LEVEL_THRESHOLD) {
-      segmentIsActive = gateRoll < INNER_SEGMENT_PROB;
     } else {
-      segmentIsActive = gateRoll < MID_SEGMENT_PROB;
+      // Broadleaf gate probability for this level, blended CONTINUOUSLY toward 1.0
+      // (clothe every branch — needles/leaflets line the whole shaft, no sky gaps) as
+      // frondyness rises. At frondyness=0 this is exactly the original gate.
+      // gateRoll was consumed above, so the draw cadence is unchanged.
+      const broadleafProb = node.branchLevel < OUTER_LEVEL_THRESHOLD ? INNER_SEGMENT_PROB : MID_SEGMENT_PROB;
+      const activeProb = broadleafProb + (1 - broadleafProb) * frondyness;
+      segmentIsActive = gateRoll < activeProb;
     }
 
     const midRadius = (parent.radius + node.radius) * 0.5;
@@ -620,9 +680,17 @@ export function generateFoliage(graph, genome, opts) {
     // At tipTuft=0: effectiveTipExp === TIP_EXPONENT and effectiveSkip === baseSkip
     //   → byte-identical output to the pre-tipTuft baseline (strict no-op).
     // -----------------------------------------------------------------------
+    // Broadleaf vs frondy bare-zone + tip-weighting, blended CONTINUOUSLY by frondyness.
+    // Broadleaf: big proximal bare zone + strong tip weighting (clumps at tips, sky-gaps).
+    // Frondy: tiny bare zone + near-even spread (clothed along the whole shaft).
+    // At frondyness=0 the blend collapses to exactly the broadleaf values (byte-identical).
     const baseSkip = node.isTerminal ? 0 : bareSkip(node.branchLevel);
-    const effectiveTipExp = TIP_EXPONENT + tipTuft * 4.0;
-    const effectiveSkip   = baseSkip + (1 - baseSkip) * tipTuft * 0.6;
+    const broadTipExp = TIP_EXPONENT + tipTuft * 4.0;
+    const broadSkip   = baseSkip + (1 - baseSkip) * tipTuft * 0.6;
+    const frondTipExp = 1.0 + tipTuft * 1.0;
+    const frondSkip   = node.isTerminal ? 0 : 0.12;
+    const effectiveTipExp = broadTipExp + (frondTipExp - broadTipExp) * frondyness;
+    const effectiveSkip   = broadSkip   + (frondSkip   - broadSkip)   * frondyness;
     const tValues = tipWeightedPositions(bodyToPlace, effectiveSkip, effectiveTipExp);
 
     for (let k = 0; k < bodyToPlace; k++) {
@@ -655,8 +723,14 @@ export function generateFoliage(graph, genome, opts) {
     const midRadius = (parent.radius + node.radius) * 0.5;
     const leafAge   = node.branchLevel / maxBranchLevel;
 
-    const apicalToPlace = Math.min(APICAL_CLUSTER, MAX_LEAVES - count);
-    if (apicalToPlace < 1) break;
+    // Apical tuft count scales with BOTH the leaf-density gene AND the twig
+    // crossfade weight. So leaf density = 0 → NO apical leaves (bare tips), and a
+    // thin / growing-in tip carries fewer. Previously apical was floored at 1,
+    // which kept every terminal leafy even at density 0 ("dense even at zero").
+    const segWeight  = node.weight !== undefined ? node.weight : 1.0;
+    const densFactor = Math.min(1, appendageDensity);
+    const apicalToPlace = Math.min(Math.round(APICAL_CLUSTER * densFactor * segWeight), MAX_LEAVES - count);
+    if (apicalToPlace < 1) continue;   // density/weight too low → no apical tuft here
 
     // Azimuth base for apical clusters — one draw per terminal segment.
     const azBase = rng() * Math.PI * 2;
@@ -700,8 +774,14 @@ export function generateFoliage(graph, genome, opts) {
     // Fresh, isolated stream — NEVER touches the leaf rng above.
     const spineRng = mulberry32((genome.structuralSeed ^ SPINE_SALT) >>> 0);
 
-    const spineCount = Math.max(1, Math.round(SPINE_DENSITY * spininess));
-    const spineScale = SPINE_BASE_SCALE * (0.5 + 0.5 * spininess);
+    // Fractional-crossfade idiom: the marginal spine grows in (scale × spineFrac)
+    // rather than Math.max(1, round()) hard-jumping to a full spine at spininess→0+
+    // and then stepping. spineFrac scales the last spine's card in the loop below.
+    const fractSpines = SPINE_DENSITY * spininess;   // 0..6
+    const fullSpines  = Math.floor(fractSpines);
+    const spineFrac   = fractSpines - fullSpines;
+    const spineCount  = fullSpines + (spineFrac > 0 ? 1 : 0);
+    const spineScale  = SPINE_BASE_SCALE * (0.5 + 0.5 * spininess);
 
     // Build an extended segment list for spines: includes ALL non-root skeleton
     // nodes (branchLevel 0 stem columns and branchLevel >= 1 branch arms alike).
@@ -786,7 +866,8 @@ export function generateFoliage(graph, genome, opts) {
         tangent[i3]      = spineTangent[0];
         tangent[i3 + 1]  = spineTangent[1];
         tangent[i3 + 2]  = spineTangent[2];
-        scale[count]     = spineScale;
+        // Marginal spine (the +1 crossfade) grows in from zero size as spininess rises.
+        scale[count]     = (k === fullSpines && spineFrac > 0) ? spineScale * spineFrac : spineScale;
         rotation[count]  = roll;
         ageColor[count]  = node.branchLevel / maxBranchLevel;
         exposure[count]  = expVal;
@@ -811,5 +892,118 @@ export function generateFoliage(graph, genome, opts) {
     exposure,
     boneIndex,
     shape: appendageBreadth,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// expandClumpsToLeaves — render-path helper.
+//
+// generateFoliage() produces CLUMP ANCHORS (one instance per anchor). For
+// broadleaves we want one SINGLE LEAF per card, so we fan each anchor into
+// LEAVES_PER_CLUMP individual leaves arranged as a small 3D spray around the
+// anchor (azimuth via the golden angle, midribs splayed outward from the clump
+// tangent, bases spread within the clump scale). This is RENDER-ONLY: it does
+// NOT touch the generation pipeline or its rng — it reads the resolved foliage
+// SoA and returns an expanded SoA for the leaf InstancedMesh.
+//
+// Gate: only broadleaf canopies expand. Frond/needle sprites are already a whole
+// frond/fascicle per card, and spiny stems carry spine cards — for those we
+// return the input SoA unchanged (K = 1 passthrough), so palms, conifers, and
+// cacti render exactly as before.
+//
+// Pure ESM (no three.js). Uses an isolated mulberry32 stream so the fan layout
+// is deterministic per (seed) but never perturbs generation.
+// ---------------------------------------------------------------------------
+
+export function expandClumpsToLeaves(foliage, genome = {}) {
+  const inCount = foliage.count | 0;
+
+  const leafDivision = genome.leafDivision ?? 0;
+  const rosette      = genome.rosette      ?? 0;
+  const spininess    = genome.spininess    ?? 0;
+  const leafWidthG   = genome.leafWidth    ?? 0.5;
+  const narrowFactor = Math.max(0, Math.min(1, (0.30 - leafWidthG) / 0.30));
+  const frondyness   = Math.max(leafDivision, rosette, narrowFactor);
+
+  // Only broadleaf canopies get one-leaf-per-card expansion (compound fronds,
+  // needles, and spiny stems keep one whole-unit card per anchor).
+  const K = (frondyness > 0.5 || spininess > 0.05) ? 1 : LEAVES_PER_CLUMP;
+  if (K <= 1 || inCount === 0) return foliage;
+
+  const maxOut   = inCount * K;
+  const position = new Float32Array(3 * maxOut);
+  const normal   = new Float32Array(3 * maxOut);
+  const tangent  = new Float32Array(3 * maxOut);
+  const scale    = new Float32Array(maxOut);
+  const rotation = new Float32Array(maxOut);
+  const ageColor = new Float32Array(maxOut);
+  const exposure = new Float32Array(maxOut);
+  const boneIndex = new Float32Array(maxOut);
+
+  const inPos = foliage.position, inNrm = foliage.normal, inTan = foliage.tangent;
+  const inScale = foliage.scale, inRot = foliage.rotation, inAge = foliage.ageColor;
+  const inExp = foliage.exposure ?? null, inBone = foliage.boneIndex ?? null;
+
+  const seed = (genome.structuralSeed ?? 1) >>> 0;
+  const rng = mulberry32((seed ^ LEAF_FAN_SALT) >>> 0);
+
+  const LEAF_SCALE = 0.58;   // single leaf size relative to the clump it came from
+  const SPLAY      = 0.55;   // how strongly each midrib fans outward from the clump tangent (tuft spread)
+
+  let out = 0;
+  for (let c = 0; c < inCount; c++) {
+    const c3 = c * 3;
+    const P  = [inPos[c3], inPos[c3 + 1], inPos[c3 + 2]];
+    const T  = norm3([inTan[c3], inTan[c3 + 1], inTan[c3 + 2]]);
+    const Nf = norm3([inNrm[c3], inNrm[c3 + 1], inNrm[c3 + 2]]);
+    const S  = inScale[c];
+    const age = inAge[c];
+    const exp = inExp ? inExp[c] : 1.0;
+    const bone = inBone ? inBone[c] : 0;
+    const roll0 = inRot[c];
+    const X = norm3(cross3(T, Nf));   // clump "right" axis
+
+    const az0 = rng() * Math.PI * 2;  // one azimuth-phase draw per clump
+    for (let j = 0; j < K; j++) {
+      const az = az0 + j * GOLDEN_ANGLE;
+      const radial = rotate3(X, T, az);
+
+      // EMBEDDED PIVOT: every leaf in the tuft shares the clump anchor as its base
+      // (the anchor sits on the branch surface — see writeCluster), so no leaf base
+      // floats off the twig. The tuft spreads by ORIENTATION (fanned midribs +
+      // staggered azimuth), not by displacing the base into the canopy volume.
+      const lx = P[0];
+      const ly = P[1];
+      const lz = P[2];
+
+      // Midrib fans outward from the clump tangent toward the radial direction.
+      const lt = norm3([
+        T[0] * (1 - SPLAY) + radial[0] * SPLAY,
+        T[1] * (1 - SPLAY) + radial[1] * SPLAY,
+        T[2] * (1 - SPLAY) + radial[2] * SPLAY,
+      ]);
+      // Face normal: clump normal re-orthogonalised against the leaf midrib.
+      const d = dot3(Nf, lt);
+      let ln = norm3([Nf[0] - lt[0] * d, Nf[1] - lt[1] * d, Nf[2] - lt[2] * d]);
+      if (!(ln[0] === ln[0])) ln = Nf;   // NaN guard (radial ∥ tangent)
+
+      const sizeJ = 0.85 + rng() * 0.30; // 1 draw/leaf
+      const o3 = out * 3;
+      position[o3] = lx; position[o3 + 1] = ly; position[o3 + 2] = lz;
+      normal[o3]  = ln[0]; normal[o3 + 1] = ln[1]; normal[o3 + 2] = ln[2];
+      tangent[o3] = lt[0]; tangent[o3 + 1] = lt[1]; tangent[o3 + 2] = lt[2];
+      scale[out]    = S * LEAF_SCALE * sizeJ;
+      rotation[out] = roll0 + (rng() - 0.5) * 0.4;  // 1 draw/leaf
+      ageColor[out] = age;
+      exposure[out] = exp;
+      boneIndex[out] = bone;
+      out++;
+    }
+  }
+
+  return {
+    count: out,
+    position, normal, tangent, scale, rotation, ageColor, exposure, boneIndex,
+    shape: foliage.shape,
   };
 }
