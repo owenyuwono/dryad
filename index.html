@@ -575,41 +575,6 @@
   #inspector-dock::-webkit-scrollbar-thumb { background: rgba(80, 120, 160, 0.3); border-radius: 2px; }
   #inspector-dock.collapsed .insp-body { display: none; }
 
-  /* Forest view — large modal overlay over the hero viewport. */
-  #forest-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(6, 8, 12, 0.6);
-    backdrop-filter: blur(2px);
-  }
-  #forest-overlay.hidden { display: none; }
-  #forest-canvas {
-    width: 86vw;
-    height: 86vh;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.25);
-    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.55);
-  }
-  #forest-overlay-close {
-    position: absolute;
-    top: calc(7vh - 2px);
-    right: calc(7vw - 2px);
-    width: 28px;
-    height: 28px;
-    font-size: 18px;
-    line-height: 1;
-    color: #cde;
-    background: rgba(20, 30, 45, 0.8);
-    border: 1px solid rgba(100, 140, 180, 0.45);
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  #forest-overlay-close:hover { color: #fff; background: rgba(40, 60, 90, 0.9); }
-
   .insp-header {
     display: flex;
     justify-content: space-between;
@@ -716,6 +681,18 @@
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
+  }
+  #forest-count-input {
+    width: 48px;
+    margin-left: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #cde;
+    background: rgba(20, 50, 90, 0.45);
+    border: 1px solid rgba(80, 120, 160, 0.35);
+    border-radius: 3px;
+    padding: 2px 3px;
+    vertical-align: middle;
   }
 </style>
 </head>
@@ -1181,22 +1158,12 @@
     <span id="leaf-mode-icon" class="rm-texticon">1&times;</span>
   </button>
   <div class="rm-divider"></div>
-  <button class="rm-btn" id="forest-toggle-btn" data-label="Forest view"
-          title="Forest view — a stand of varied individuals (Poisson-placed)">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <polygon points="4,2.5 6.6,8.5 1.4,8.5" fill="currentColor"/>
-      <rect x="3.5" y="8.5" width="1" height="4" fill="currentColor"/>
-      <polygon points="11,5 13.6,11 8.4,11" fill="currentColor" opacity="0.75"/>
-      <rect x="10.5" y="11" width="1" height="3" fill="currentColor" opacity="0.75"/>
-    </svg>
-  </button>
-</div>
-
-<!-- Forest view — large overlay; toggled by #forest-toggle-btn. Its own WebGL
-     context (forestPreview.js) renders a Poisson-placed stand of varied individuals. -->
-<div id="forest-overlay" class="hidden">
-  <canvas id="forest-canvas"></canvas>
-  <button id="forest-overlay-close" title="Close forest view (Esc)">&times;</button>
+  <span class="rm-slider-label" title="Forest — number of trees" aria-hidden="true" style="display:inline-flex;align-items:center;">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><polygon points="8,2 12.5,11 3.5,11" fill="currentColor"/><rect x="7.3" y="11" width="1.4" height="3" fill="currentColor"/></svg>
+  </span>
+  <input type="number" id="forest-count-input"
+         min="1" max="1000" step="1" value="1"
+         title="Forest — number of trees (same genome, different seeds). Type a count + Enter. 1 = single specimen. High counts are slow until instancing/LOD is added.">
 </div>
 
 <div id="info">procedural flora · single specimen explorer</div>

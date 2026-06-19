@@ -5,7 +5,7 @@ import { TREE_DEFAULT, PRESETS }          from './presets.js';
 import { pigmentToColor }                 from './colorRamp.js';
 import { mountInspectorPanels }           from './inspectorPanels.js';
 import { createBarkSwatch }               from './barkSwatch.js';
-import { createForestPreview }            from './forestPreview.js';
+import { buildForestGroup }               from './forest.js';
 import { createLeafCardPreview }          from './leafCardPreview.js';
 
 // =============================================================================
@@ -167,12 +167,48 @@ viewer.attachRenderModeController(renderModeCtrl);
 const barkSwatch = createBarkSwatch(document.getElementById('insp-bark'));
 barkSwatch.start();
 
-// 3D preview panels (own WebGL contexts, like barkSwatch). The crossed-card leaf
-// cluster is a dock thumbnail; the forest is a large toggled OVERLAY (own canvas) —
-// not started here, it starts when its overlay is opened (see wireForestToggle).
-const forestPreview = createForestPreview(document.getElementById('forest-canvas'));
+// Crossed-card leaf cluster — a dock thumbnail preview (own WebGL context).
 const leafCardPreview = createLeafCardPreview(document.getElementById('insp-leaf-cards'));
 leafCardPreview.start();
+
+// Forest mode — a stand of varied individuals rendered IN THE HERO VIEW (not a modal).
+// forestCount: 1 = single specimen; >1 = a Poisson-placed stand of the same genome with
+// different seeds (driven by the count slider). forestHandle owns the built group
+// (disposed on rebuild / back to 1×).
+let forestCount = 1;
+let forestHandle = null;
+let forestRebuildTimer = 0;
+
+// reframe: re-aim the camera at the stand. true on count change (bounds changed),
+// false on a genome-driven rebuild at the same count (preserves the user's orbit/pan).
+function rebuildForest(reframe) {
+  if (!genome || forestCount <= 1) return;
+  // Build the new stand first, swap it into the scene (setForest removes the old group),
+  // THEN dispose the old handle — so a disposed group is never left in the scene.
+  const old = forestHandle;
+  // Respect the user's leaf-mode setting (single-leaf cards vs clustered sprites) —
+  // toggling leaf mode calls renderCurrent() → scheduleForestRebuild(), so the stand
+  // tracks it. (single-leaf × many trees is heavier; the count slider controls that.)
+  const leafMode = (typeof viewer.getLeafMode === 'function') ? viewer.getLeafMode() : 'single';
+  forestHandle = buildForestGroup({ genome, env: getEnvelope(), count: forestCount, leafMode });
+  viewer.setForest(forestHandle.group, forestHandle.bounds, reframe);
+  if (old) old.dispose();
+}
+function scheduleForestRebuild() {
+  if (forestCount <= 1) return;
+  if (forestRebuildTimer) clearTimeout(forestRebuildTimer);
+  forestRebuildTimer = setTimeout(() => { forestRebuildTimer = 0; rebuildForest(false); }, 250);
+}
+function applyForestCount(n) {
+  forestCount = n;
+  if (forestRebuildTimer) { clearTimeout(forestRebuildTimer); forestRebuildTimer = 0; }
+  if (n <= 1) {
+    viewer.clearForest();
+    if (forestHandle) { forestHandle.dispose(); forestHandle = null; }
+  } else {
+    rebuildForest(true);   // count changed → reframe the camera to the new stand
+  }
+}
 
 const inspector = mountInspectorPanels({
   viewer,
@@ -199,7 +235,7 @@ const inspector = mountInspectorPanels({
     const collapsed = dock.classList.toggle('collapsed');
     if (collapsed) {
       // Stop spinning the dock WebGL preview contexts while hidden. (The forest is
-      // an overlay, not a dock card — its start/stop is owned by wireForestToggle.)
+      // an in-viewport stand in the hero scene, not a dock card — no spin to pause.)
       barkSwatch.stop();
       leafCardPreview.stop();
     } else {
@@ -220,37 +256,30 @@ function refreshInspector(resolved) {
   lastResolved = resolved;
   inspector.refresh();
   barkSwatch.setGenome(resolved);
-  // Forest re-resolves N varied individuals (needs genome + env); leaf-card puff
-  // just needs the leaf-shape genes. Both debounce / no-op while the dock is collapsed.
-  forestPreview.setGenome(genome, getEnvelope());
   leafCardPreview.setGenome(genome);
+  // In forest mode, re-resolve the stand to match the current genome (debounced — one
+  // rebuild after a slider drag settles, not per-tick). No-op at 1× (single specimen).
+  scheduleForestRebuild();
 }
 
-// Wire the forest-view toggle: opens a large overlay with the Poisson-placed stand.
-// The forestPreview only spins/rebuilds while the overlay is open (start/stop here);
-// refreshInspector keeps feeding it the current genome (it rebuilds lazily on open).
-(function wireForestToggle() {
-  const btn      = document.getElementById('forest-toggle-btn');
-  const overlay  = document.getElementById('forest-overlay');
-  const closeBtn = document.getElementById('forest-overlay-close');
-  if (!btn || !overlay) return;
-
-  let open = false;
-  function setOpen(v) {
-    open = v;
-    overlay.classList.toggle('hidden', !open);
-    btn.classList.toggle('active', open);
-    if (open) {
-      // Class removed first → canvas now has layout → resize reads the real size.
-      forestPreview.resize();
-      forestPreview.start();   // start() rebuilds the stand if the genome changed while closed
-    } else {
-      forestPreview.stop();
-    }
+// Wire the forest count INPUT — 1 (single specimen) … N (a stand of varied individuals,
+// same genome / different seeds, Poisson-placed, IN THE HERO VIEW). Builds on COMMIT
+// (Enter / blur / spinner), clamped to [1,1000], debounced to coalesce spinner clicks.
+(function wireForestCount() {
+  const input = document.getElementById('forest-count-input');
+  if (!input) return;
+  let timer = 0;
+  function commit() {
+    let n = parseInt(input.value, 10);
+    if (!Number.isFinite(n)) n = 1;
+    n = Math.max(1, Math.min(1000, n));
+    if (String(n) !== input.value) input.value = String(n);   // reflect the clamp
+    applyForestCount(n);
   }
-  btn.addEventListener('click', () => setOpen(!open));
-  if (closeBtn) closeBtn.addEventListener('click', () => setOpen(false));
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) setOpen(false); });
+  input.addEventListener('change', () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = 0; commit(); }, 150);
+  });
 })();
 
 // Wire reveal-roots toggle button
@@ -367,7 +396,6 @@ window.addEventListener('resize', () => {
   viewer.resize();
   inspector.resize();
   barkSwatch.resize();
-  forestPreview.resize();
   leafCardPreview.resize();
 });
 
@@ -585,7 +613,7 @@ refreshInspector(resolved);
 
 // Inspector canvases size from their laid-out client box; re-paint once after the
 // first layout/paint so they aren't stuck at a zero/stale size on initial load.
-requestAnimationFrame(() => { inspector.resize(); barkSwatch.resize(); forestPreview.resize(); leafCardPreview.resize(); });
+requestAnimationFrame(() => { inspector.resize(); barkSwatch.resize(); leafCardPreview.resize(); });
 
 // =============================================================================
 // STATS PANEL — polls viewer.getStats() ~4×/sec and updates DOM

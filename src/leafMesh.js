@@ -352,7 +352,12 @@ vCanopyNormal = aCanopyNormal;
   // instanceMatrix) so it always points at gravity regardless of how the leaf
   // is oriented — adding it pre-instance would let the leaf rotation warp the
   // down vector into another direction (the warp trap).
-  float leafLen = length(instanceMatrix[1].xyz);
+  // World-space leaf length (column 1 = the blade's up/length axis). Uses the FULL
+  // model→world transform (modelMatrix * instanceMatrix), so the gravity droop — which
+  // is added in world/view space below — stays proportional to the leaf's RENDERED size
+  // even when the mesh is under a scaled parent (e.g. a forest tree group). With the mesh
+  // at the scene root (single specimen) modelMatrix = I, so this is unchanged there.
+  float leafLen = length((modelMatrix * instanceMatrix)[1].xyz);
   float bendDroop = position.y * position.y * leafLen * uLeafBend;
   vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
   gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));
@@ -562,7 +567,12 @@ uniform float uLeafBend;
 #include <project_vertex>
 #ifdef USE_INSTANCING
   vec3 followDelta = windBoneFollowDelta(leafWorldAnchor, aBoneIndex);
-  float leafLen = length(instanceMatrix[1].xyz);
+  // World-space leaf length (column 1 = the blade's up/length axis). Uses the FULL
+  // model→world transform (modelMatrix * instanceMatrix), so the gravity droop — which
+  // is added in world/view space below — stays proportional to the leaf's RENDERED size
+  // even when the mesh is under a scaled parent (e.g. a forest tree group). With the mesh
+  // at the scene root (single specimen) modelMatrix = I, so this is unchanged there.
+  float leafLen = length((modelMatrix * instanceMatrix)[1].xyz);
   float bendDroop = position.y * position.y * leafLen * uLeafBend;
   vec3 gravityDelta = vec3(0.0, -bendDroop, 0.0);
   gl_Position = projectionMatrix * (mvPosition + viewMatrix * vec4(followDelta + gravityDelta, 0.0));

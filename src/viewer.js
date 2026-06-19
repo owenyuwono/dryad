@@ -379,6 +379,15 @@ export function createViewer(canvas) {
   // Only auto-frame on the very first setPlant call.
   let firstPlant = true;
 
+  // Forest mode: a Group of N stand trees added to the scene (built by forest.js).
+  // When set, the single specimen meshes are hidden and the camera frames the stand.
+  let _forestGroup = null;
+  // Intended specimen part-visibility (the inspector isolate-part toggles set these).
+  // setForest force-hides the meshes WITHOUT touching this intent, so clearForest can
+  // restore exactly what the user had toggled, not a blind `true`.
+  let _foliageVisible = true;
+  let _structureVisible = true;
+
   // Whether roots are currently revealed (ground faded, camera uses true bounds).
   let rootsRevealed = false;
 
@@ -1129,6 +1138,7 @@ export function createViewer(canvas) {
      * @param {boolean} visible
      */
     setFoliageVisible(visible) {
+      _foliageVisible = visible;
       leaves.mesh.visible = visible;
     },
 
@@ -1143,7 +1153,51 @@ export function createViewer(canvas) {
      * @param {boolean} visible
      */
     setStructureVisible(visible) {
+      _structureVisible = visible;
       branchMesh.visible = visible;
+    },
+
+    /**
+     * setForest(group, bounds)
+     *
+     * Show a forest stand (a THREE.Group of N trees built by forest.js) IN THE HERO
+     * SCENE: hides the single specimen (branch + leaves), adds the group, and frames
+     * the camera to the stand bounds. Replaces any previously-set forest group in the
+     * scene (the caller owns disposal of the old group). The group carries its own
+     * materials and is static (no wind / no render-mode swap).
+     *
+     * reframe: re-aim the camera at the stand bounds. Pass true when ENTERING forest
+     * mode or changing the count (bounds changed); pass false for a genome-driven
+     * rebuild at the same count (bounds are identical) so the user's orbit/pan survives.
+     */
+    setForest(group, bounds, reframe = true) {
+      if (_forestGroup && _forestGroup !== group) scene.remove(_forestGroup);
+      _forestGroup = group;
+      if (group) scene.add(group);
+      branchMesh.visible = false;   // hide specimen WITHOUT changing the user's toggle intent
+      leaves.mesh.visible = false;
+      if (reframe && bounds) {
+        const fit = computeFitFromBounds(bounds);
+        target = fit.center.clone();
+        radius = fit.fitRadius;
+      }
+    },
+
+    /**
+     * clearForest()
+     *
+     * Remove the forest group from the scene (caller disposes it), restore the single
+     * specimen, and re-frame the camera to the specimen's last bounds.
+     */
+    clearForest() {
+      if (_forestGroup) { scene.remove(_forestGroup); _forestGroup = null; }
+      // Restore the parts the user actually wants visible (not a blind true), so the
+      // isolate-part toggles stay in sync after leaving forest mode.
+      branchMesh.visible = _structureVisible;
+      leaves.mesh.visible = _foliageVisible;
+      const fit = lastBounds ? computeFitFromBounds(lastBounds) : defaultFit();
+      target = fit.center.clone();
+      radius = fit.fitRadius;
     },
   };
 }

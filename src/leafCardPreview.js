@@ -151,7 +151,7 @@ export function createLeafCardPreview(canvas) {
     buildClump();
   }
 
-  // Debounced + collapse-gated entry point (mirrors forestPreview): never rasters on
+  // Debounced + collapse-gated entry point: never rasters on
   // a per-slider-tick storm, and does zero work while the dock is collapsed (a dirty
   // flag forces one rebuild on expand).
   let pending = null, dirty = false, rebuildTimer = 0, running = false;
