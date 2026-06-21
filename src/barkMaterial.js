@@ -58,9 +58,56 @@ const float BARK_RIDGE_FREQ_SCALE   = 0.5;
 const float BARK_FISSURE_FREQ_SCALE = 0.42;
 const float BARK_FISSURE_WEIGHT     = 0.55;
 const float BARK_BUMP_MIN           = 0.18;
-const float BARK_BUMP_MAX           = 0.55;
-const float BARK_PLATE_FREQ         = 1.4;
-const float BARK_CRACK_WIDTH        = 6.0;
+const float BARK_BUMP_MAX           = 0.55;  // gentler than 0.80 — strong bump tilted the crack walls up
+                                             // into the sun (bright-network look); AO now carries the dark.
+// PLATE (voronoi cell) size — higher = SMALLER plates (more cells), so the trunk reads as
+// many fine bark scales rather than a few big obvious voronoi cells. Raised 1.4→2.6 (~2×
+// smaller plates). Note: shrinking plates also thins the fissures proportionally, so
+// BARK_CRACK_WIDTH below is lowered by the same factor to keep the fissure size constant.
+// (uBarkScale also scales this — gene-driven — but it scales the FBM grain too.)
+const float BARK_PLATE_FREQ         = 2.6;
+// Crack THINNESS: the border groove occupies edge-distance up to 1/BARK_CRACK_WIDTH, so a
+// LARGER value = THINNER cracks. Lowered 40→21 in step with the BARK_PLATE_FREQ increase so
+// the absolute fissure width stays the same while the plates shrink. NOTE the normal-sampling
+// eps (barkPerturbNormal) is the real floor — a crack thinner than eps won't resolve.
+const float BARK_CRACK_WIDTH        = 21.0;
+// Ridged-FBM octave count. Raised from 5 → 8 so fine bark grain survives a close-up
+// zoom (5 octaves anchored to a fixed object-space frequency ran out of detail when
+// magnified → soft/blurry up close). The per-octave AA fade in ridgedFBM still drops
+// sub-pixel octaves when far, so the extra octaves add NO shimmer at distance — they
+// only switch on as the camera nears. Cost ~+60% noise; lower this if a big forest
+// stand drops frames (it is the single perf knob for this).
+const int   BARK_FBM_OCTAVES        = 8;
+// Damp the vertical part of the domain warp so furrows wander side-to-side (organic)
+// but are NOT chopped into vertical segments. 1.0 = old isotropic warp; 0 = dead-straight.
+const float BARK_WARP_Y_DAMP        = 0.30;
+
+// ---- OAK/ASH BARK MODEL (matches the reference photo) -------------------------------
+// The CRACKS are the voronoi cell BORDERS — the thin lines between cells, recessed into
+// grooves. The voronoi CELLS are the bark scales/plates. Cells are vertically elongated
+// (BARK_PLATE_ASPECT < 1 → cells taller than wide), so the borders run mostly VERTICALLY
+// as the long root→branch fissures, with the shorter horizontal borders breaking the
+// ridges into stacked scales — both fall out of one cellular field. The network is broken
+// into ragged fragments (gate noise) so it never reads as clean closed cells, and the
+// borders are cut deep (× BARK_FISSURE_DEPTH) so the cracks read strongly in the normal map.
+const float BARK_PLATE_ASPECT       = 0.45;  // cell height/width = 1/ASPECT ≈ 2.2× → vertical scales
+const float BARK_VORONOI_BREAK_FREQ = 2.3;   // freq (in cell units) of the noise that fragments the borders
+const float BARK_FISSURE_GATE_LO    = 0.34;  // border-gate lo/hi: raise LO for more gaps (more broken)
+const float BARK_FISSURE_GATE_HI    = 0.72;
+const float BARK_FISSURE_DEPTH      = 0.6;   // crack groove depth (× uBarkPlates). Kept MODERATE — deep
+                                             // steep cracks catch the sun on their walls (the bright-network
+                                             // inversion); the dark fissures now come from BARK_CRACK_AO +
+                                             // the crack albedo, not from extreme geometric depth.
+// BLOCK MODEL relief: the voronoi CELLS are raised plateaus (the bark scales), the crack
+// network is recessed, and the FBM rides on top as fine grain ON the block faces — so the
+// blocky scale structure is the DOMINANT relief (matching the reference) rather than broad
+// FBM furrows. The albedo darkens the SAME crack mask, so dark fissures align with grooves.
+const float BARK_Y_STRETCH          = 3.0;   // must match the Y-stretch applied in barkPGrain
+const float BARK_BLOCK_HEIGHT       = 0.38;  // raised height of the block plateaus (the bark scales)
+const float BARK_GRAIN_AMT          = 0.40;  // amplitude of the FBM fine grain on the block faces
+const float BARK_CRACK_DARKEN       = 0.85;  // how dark the crack colour goes in the albedo (0..1)
+const float BARK_CRACK_AO           = 0.80;  // ambient-occlusion darkening in the cracks (0..1) — the
+                                             // main lever that keeps fissures DARK instead of catching light
 // BARK_CRACK_DEPTH (0.45) was the fixed voronoi crack depth; it is now the uBarkPlates
 // gene (ridges↔plates morphology), whose 0.45 identity default reproduces this value.
 
@@ -137,10 +184,12 @@ float ridgedFBM(vec3 pw, float freq, float fw) {
     float amp   = 1.0;
     float total = 0.0;
     float norm  = 0.0;
-    for (int oct = 0; oct < 5; oct++) {
+    for (int oct = 0; oct < BARK_FBM_OCTAVES; oct++) {
         // Band-limit: fade out this octave when its pixel footprint >= ~1 px.
+        // Wider fade band (0.35→1.3) preserves fine grain a little longer on zoom-in
+        // before band-limiting, without re-introducing shimmer at distance.
         float octFw   = fw * freq;
-        float aaFade  = 1.0 - smoothstep(0.4, 1.0, octFw);
+        float aaFade  = 1.0 - smoothstep(0.35, 1.3, octFw);
         total += ridgeOctave(pw * freq) * amp * aaFade;
         norm  += amp;
         freq  *= 2.13;   // slightly irrational lacunarity -> no aliasing
@@ -210,6 +259,9 @@ float barkHeightField(vec3 p_grain, float featureScale, float fw) {
     // Domain warp: nudge the ridge coordinates with a low-freq FBM so
     // ridges meander organically rather than running perfectly straight.
     vec3 warpOfs = barkWarpFBM(p_grain * 0.45) * 0.55;
+    // Damp the vertical wander so ridges/furrows stay continuous up the trunk (they
+    // still meander side-to-side via the full x/z warp) — keeps the long root→branch lines.
+    warpOfs.y *= BARK_WARP_Y_DAMP;
     vec3 pw = p_grain + warpOfs;
 
     // uBarkScale: 0 = coarse plates, 1 = fine plates (modulates ridge frequency).
@@ -257,9 +309,29 @@ float barkVoronoiEdge(vec2 q) {
         }
     }
     // Edge distance: F2 - F1 (approximately 0 at boundaries, > 0 inside plates).
-    // sqrt to get linear distance; smoothstep for crack sharpness.
+    // sqrt to get linear distance; ramp gives the crack groove a FIXED OBJECT-SPACE width
+    // (half-width 1/BARK_CRACK_WIDTH in edge units). This drives the RELIEF/normal, so an
+    // object-space width is what we want: the finite-difference normal then resolves the
+    // crack wall consistently at any zoom (a screen-relative width would make the groove
+    // depth swim with the camera). Returns 0 ON the border (crack), 1 in the plate interior.
     float edge = sqrt(minDist2) - sqrt(minDist1);
     return clamp(edge * BARK_CRACK_WIDTH, 0.0, 1.0);
+}
+
+// Shared CRACK MASK — the disconnected voronoi-border network in [0,1] (1 = inside a crack,
+// 0 = on a block face). Used by BOTH the relief (barkReliefHeight) and the albedo
+// (barkAlbedo) so the dark crack COLOUR lines up exactly with the recessed grooves. The
+// voronoi CELLS are the bark scales; tall cells (BARK_PLATE_ASPECT < 1) make the borders run
+// mostly VERTICALLY (long fissures) with shorter horizontal borders breaking them into
+// stacked scales. A noise gate fragments the network so it never reads as clean closed cells.
+float barkCrackMask(vec3 p_grain, float featureScale) {
+    float plateFreq = (BARK_PLATE_FREQ * mix(0.6, 1.8, uBarkScale)) / max(featureScale, 0.04);
+    vec2  plateUV   = vec2(p_grain.x, (p_grain.y / BARK_Y_STRETCH) * BARK_PLATE_ASPECT) * plateFreq;
+    float crack     = 1.0 - barkVoronoiEdge(plateUV);   // 1 on a border (crack), 0 in a cell
+    float gate = barkNoise(vec3(plateUV * BARK_VORONOI_BREAK_FREQ, p_grain.y * 0.3)
+                           + vec3(21.3, 7.1, 4.9)) * 0.5 + 0.5;
+    crack *= smoothstep(BARK_FISSURE_GATE_LO, BARK_FISSURE_GATE_HI, gate);
+    return clamp(crack, 0.0, 1.0);
 }
 
 // Horizontal lenticel marks for birch-like bark.
@@ -309,12 +381,12 @@ float barkLenticel(vec3 p_grain, float prominence) {
 // Colour from orthogonal uBarkHue (grey→warm) + uBarkLightness (dark→pale); dashes from
 // uBarkLenticels — all independent. h is used only to pool lichen into crevices (a colour
 // feature, not the furrow line); worldY biases lichen toward the base.
-vec3 barkAlbedo(vec3 p_grain, float h, float worldY) {
+vec3 barkAlbedo(vec3 p_grain, float h, float worldY, float featureScale) {
     // ---- Procedural palette from orthogonal uBarkHue + uBarkLightness ----
     // bL = base lightness (dark↔pale); bS/bH = saturation+hue (grey↔warm brown→red).
-    float bL = mix(0.10, 0.92, uBarkLightness);
+    float bL = mix(0.24, 0.92, uBarkLightness);  // raised floor (0.10→0.24) so dark genes aren't near-black
     float bS = uBarkHue * 0.55;
-    float bH = mix(0.09, 0.02, uBarkHue);   // tan/yellow-brown → red as hue rises
+    float bH = mix(0.095, 0.035, uBarkHue); // tan/yellow-brown → warm brown (floor lifted off pure red)
     // paletteRidge/paletteFurrow are kept ONLY as the source tones for the lenticel dashes
     // (a colour feature). The furrow/ridge/crack RELIEF is rendered by the normal map now,
     // so it is no longer mixed into baseCol.
@@ -329,9 +401,16 @@ vec3 barkAlbedo(vec3 p_grain, float h, float worldY) {
     // by the normal-map relief + lighting. Only the genuine colour features below tint this.
     // DESATURATED + nudged off the red end: at full bS/bH the flat base reads as saturated
     // salmon/pink (the old painted look only read brown because dark furrows pulled it down).
-    float baseSat = bS * 0.50;                 // earthy, not salmon
-    float baseHue = mix(bH, 0.07, 0.40);       // pull toward tan/orange-brown, away from red
+    float baseSat = bS * 0.52;                 // warm tan/ochre (ref base), a touch less saturated
+    float baseHue = mix(bH, 0.08, 0.5);        // pull firmly toward tan, away from red/maroon
     vec3 baseCol = hsl2rgb(baseHue, baseSat, bL);
+
+    // ---- Crack-aligned tone: dark recessed fissures vs lighter block faces ----
+    // Use the SAME crack mask the relief uses, so the dark colour lands exactly in the
+    // grooves (the reference's defining contrast) instead of following broad FBM furrows.
+    float crackC   = barkCrackMask(p_grain, featureScale);   // 1 in crack, 0 on block face
+    vec3  crackCol = hsl2rgb(clamp(bH - 0.005, 0.0, 1.0), clamp(bS * 1.1, 0.0, 1.0), clamp(bL - 0.32, 0.0, 1.0));
+    baseCol = mix(baseCol, crackCol, crackC * BARK_CRACK_DARKEN);
 
     // ---- Lichen: in deep crevices AND biased toward base (lower worldY) ----
     // lichenCrevice: low h = deep furrow = likely crevice.
@@ -348,6 +427,14 @@ vec3 barkAlbedo(vec3 p_grain, float h, float worldY) {
     vec3 blotchCol = mix(paletteBlotchCool, paletteBlotchWarm, blotch);
     baseCol = mix(baseCol, blotchCol, 0.22);
 
+    // ---- Oxidation / rust patches: scattered warm, saturated weathering zones ----
+    // Low-freq noise selects ~organic patches that shift toward a rust-orange; modest blend
+    // so they enrich variation without reading as painted stains (the reference's warm zones).
+    float oxide = barkNoise(p_grain * 0.22 + vec3(9.2, 0.8, 6.4)) * 0.5 + 0.5;
+    oxide = smoothstep(0.40, 0.78, oxide);
+    vec3 oxideCol = hsl2rgb(clamp(bH - 0.01, 0.0, 1.0), clamp(bS * 1.4, 0.0, 1.0), clamp(bL - 0.05, 0.0, 1.0));
+    baseCol = mix(baseCol, oxideCol, oxide * 0.40);
+
     // ---- Lenticel marks: now an INDEPENDENT axis (uBarkLenticels), decoupled from
     // furrow/color — so brown bark can have lenticels (cherry) or pale bark none. ----
     float lenticelProminence = clamp(uBarkLenticels * 1.2, 0.0, 1.0);
@@ -356,8 +443,14 @@ vec3 barkAlbedo(vec3 p_grain, float h, float worldY) {
     vec3 lenticelCol = mix(paletteRidge, paletteFurrow * 0.55, 0.75);
     baseCol = mix(baseCol, lenticelCol, lenticelMask);
 
-    // ---- Micro-variation: +-0.04 from high-freq noise ----
-    float micro = barkNoise(p_grain * 8.3 + vec3(1.1, 4.4, 2.2)) * 0.04;
+    // ---- Cavity darkening: a gentle extra shade in the FBM-grain lows on the block faces.
+    // Milder now (0.82) since the crack-aligned darkening above carries the strong fissure
+    // colour; this just keeps the block faces from reading flat.
+    float cavity = mix(0.82, 1.0, clamp(h * 1.7, 0.0, 1.0));
+    baseCol *= cavity;
+
+    // ---- Micro-variation: +-0.06 from high-freq noise (visible weathered speckle close up) ----
+    float micro = barkNoise(p_grain * 8.3 + vec3(1.1, 4.4, 2.2)) * 0.06;
     baseCol = clamp(baseCol + micro, 0.0, 1.0);
 
     return baseCol;
@@ -371,22 +464,26 @@ vec3 barkAlbedo(vec3 p_grain, float h, float worldY) {
 // fw: pixel-footprint scale (same as passed to barkHeightField).
 //     Used to attenuate bump strength toward 0 when the sampled noise is
 //     sub-pixel — preventing random per-pixel specular glints at distance.
-const float BARK_Y_STRETCH = 3.0; // must match the stretch applied in barkPGrain
+// (BARK_Y_STRETCH is defined in the top constants block.)
 
-// Combined bark RELIEF height — the height field the NORMAL follows. It is the
-// FBM ridge field MINUS the voronoi plate cracks (the same cracks barkAlbedo
-// darkens), so the normal map follows the VISIBLE bark pattern instead of only
-// the coarse ridges. The plate UV here is identical to the one used for the
-// albedo crack mask (vObjPos = p_grain with Y un-stretched by BARK_Y_STRETCH),
-// so the lit grooves line up exactly with the painted cracks.
+// Combined bark RELIEF height — the height field the NORMAL follows: the FBM ridge field
+// MINUS the voronoi-border CRACKS, so the normal map carries the full oak/ash pattern
+// (scale plates separated by recessed fissures), not just the coarse FBM ridges.
 float barkReliefHeight(vec3 p_grain, float featureScale, float fw) {
-    float h = barkHeightField(p_grain, featureScale, fw);
-    float plateFreq = (BARK_PLATE_FREQ * mix(0.6, 1.8, uBarkScale)) / max(featureScale, 0.04);
-    vec2  plateUV   = vec2(p_grain.x, (p_grain.y / BARK_Y_STRETCH) * 1.4) * plateFreq;
-    float vEdge     = barkVoronoiEdge(plateUV);   // 1 inside plate, 0 on a crack
-    // Cracks cut grooves into the relief, depth driven by uBarkPlates (ridges↔plates),
-    // gated by uBarkRelief — same factor the albedo crack mask uses, so lit grooves match.
-    h -= uBarkRelief * uBarkPlates * (1.0 - vEdge);
+    // BLOCK MODEL: voronoi CELLS = raised block plateaus (the bark scales); the disconnected
+    // border network = deep recessed cracks; the FBM rides on top as fine grain ON the block
+    // faces (faded out inside the cracks). This makes the blocky scale structure the dominant
+    // relief — matching the reference — instead of the broad FBM furrows it used to be.
+    float crack = barkCrackMask(p_grain, featureScale);        // 1 in crack, 0 on block face
+    float face  = 1.0 - crack;                                  // 1 on block face, 0 in crack
+    float grain = barkHeightField(p_grain, featureScale, fw);   // FBM [0,1] surface texture
+    // Raised, grainy block faces MINUS deep recessed cracks. Cracks cut to
+    // -uBarkPlates × BARK_FISSURE_DEPTH; faces sit at +BARK_BLOCK_HEIGHT (+ grain). All
+    // gated by uBarkRelief so a smooth-bark gene flattens to nothing.
+    float h = uBarkRelief * (
+          face  * (BARK_BLOCK_HEIGHT + BARK_GRAIN_AMT * grain)
+        - crack * uBarkPlates * BARK_FISSURE_DEPTH
+    );
     // Exfoliation: lift the patch BOUNDARY (curling-flake lip) so peel edges catch raking
     // light. Gated by uBarkRelief so on smooth bark (relief→0) shedding is colour-only mottle.
     // shedEdge humps at the patch boundary (peaks where shed≈0.5). No-op when uBarkShed=0.
@@ -397,8 +494,11 @@ float barkReliefHeight(vec3 p_grain, float featureScale, float fw) {
 }
 
 vec3 barkPerturbNormal(vec3 p_grain, vec3 worldNormal, float featureScale, float fw) {
-    // Bump epsilon proportional to feature size, clamped to a sane range.
-    float eps = clamp(featureScale * 0.04, 0.003, 0.04);
+    // Bump epsilon proportional to feature size. This is the FLOOR on crack thinness — a
+    // crack narrower than eps won't resolve in the finite difference — so it's tightened
+    // (0.04→0.012) to match the thin voronoi-border cracks (BARK_CRACK_WIDTH) and keep the
+    // walls sharp. High FBM octaves have negligible amplitude, so the small step is safe.
+    float eps = clamp(featureScale * 0.012, 0.0025, 0.04);
 
     // Sample the COMBINED relief (FBM ridges + voronoi cracks) so the normal
     // follows the same features the albedo paints — the cracks become grooves.
@@ -419,7 +519,7 @@ vec3 barkPerturbNormal(vec3 p_grain, vec3 worldNormal, float featureScale, float
     // Kept GENTLE on purpose — with the flat albedo, the relief is the ONLY furrow cue,
     // and a strong bump tilts the groove walls perpendicular to the sun so they self-shadow
     // to near-black (the harsh "cracked-salmon" look). A soft bump keeps grooves lit + grey.
-    float bumpStr = clamp(featureScale * 1.4, BARK_BUMP_MIN, BARK_BUMP_MAX);
+    float bumpStr = clamp(featureScale * 2.0, BARK_BUMP_MIN, BARK_BUMP_MAX);
 
     // Attenuate bump ONLY when the grain is genuinely sub-pixel. The grain coord
     // stretches Y by BARK_Y_STRETCH (×3), which inflates fw, so the old
@@ -562,7 +662,7 @@ barkH = mix(0.55, barkH, mix(0.25, 1.0, uBarkRelief));
 // ---- Override diffuseColor with procedural bark albedo (FLAT base + colour features) ----
 // The voronoi plate edge is no longer needed for albedo (the pattern lives in the normal).
 // barkReliefHeight computes its own plate UV internally for the NORMAL relief.
-diffuseColor.rgb = barkAlbedo(barkPGrain, barkH, vObjPos.y);
+diffuseColor.rgb = barkAlbedo(barkPGrain, barkH, vObjPos.y, barkFeatureScale);
 // ---- Herbaceous blend: green soft stem at low uWoodiness ----
 // uWoodiness=1 → identity (exactly the bark albedo above).
 // uWoodiness=0 → green herbaceous stem colour, no bark texture.
@@ -612,8 +712,8 @@ float roughnessFactor = roughness;
 // Bark is a MATTE, diffuse-dominant surface — keep roughness high so it doesn't read as
 // glossy/plastic (the flat albedo otherwise lets specular highlights dominate). Furrows
 // (low barkH) are slightly rougher than worn ridge tops (high barkH), but both stay matte.
-float barkRoughnessBase  = mix(0.84, 0.96, uBarkRelief);   // furrows
-float barkRoughnessRidge = mix(0.70, 0.82, uBarkRelief);   // ridge tops
+float barkRoughnessBase  = mix(0.86, 0.96, uBarkRelief);   // furrows
+float barkRoughnessRidge = mix(0.74, 0.86, uBarkRelief);   // ridge tops (weathered, matte — no plastic gloss)
 roughnessFactor = mix(barkRoughnessBase, barkRoughnessRidge, barkH);
 // Herbaceous stems are soft/matte (rougher than polished bark ridges).
 // uWoodiness=1 → identity (bark roughness unchanged).
@@ -630,6 +730,15 @@ roughnessFactor = mix(0.78, roughnessFactor, uWoodiness);
 // indirect by vAo (NOT 1-vAo): vAo=1 → full IBL, vAo=0 → 0.15 in crevices.
 const FRAG_AO_REPLACEMENT = /* glsl */`
 reflectedLight.indirectDiffuse *= mix(1.0, vAo, 0.85);
+// Procedural crack AO — the KEY to dark fissures. Deep cracks are in self-shadow/occlusion
+// in real bark; without this, the recessed crack walls instead CATCH the directional sun and
+// read as a bright network (the inverted look). Darken BOTH indirect (IBL) and, partly,
+// direct so the cracks stay dark under any light angle. Aligned with the relief via the same
+// barkCrackMask. Gated by uBarkRelief so smooth-bark genes aren't darkened.
+float barkAO = 1.0 - barkCrackMask(barkPGrain, barkFeatureScale) * (BARK_CRACK_AO * uBarkRelief);
+reflectedLight.indirectDiffuse  *= barkAO;
+reflectedLight.directDiffuse    *= mix(1.0, barkAO, 0.7);
+reflectedLight.indirectSpecular *= barkAO;
 `;
 
 // ---------------------------------------------------------------------------
