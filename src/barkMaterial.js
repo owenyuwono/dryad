@@ -132,6 +132,19 @@ const float BARK_FURROW_WARP        = 0.8;   // domain-warp amplitude → furrow
                                              // instead of regular stripes. The FBM IS the texture; the
                                              // furrow coordinate (count + meander) only GUIDES its flow.
 const float BARK_FURROW_DEPTH       = 0.06;  // furrow relief depth = normal-tilt strength (deep)
+// HORIZONTAL CROSS-FRACTURES (S1) — the "palm fiber → oak" structure. Thin recessed cracks that
+// chop the vertical furrow RIDGES into stacked oak scales. Sampled on the SAME seamless cylinder
+// embedding as the furrows (cos/sin of the furrow angle → no wrap seam) and keyed to alongArc so
+// they align with the furrow grain. Because the cracks come from the 3-D noise field they vary
+// AROUND the trunk → ragged, staggered breaks (never clean horizontal rings). Driven by the
+// (previously inert) uBarkPlates gene × uBarkRelief, so 0 = continuous ridges (strict no-op,
+// byte-identical) and the 0.45 default = a moderate scaling. Smooth-bark presets (low barkRelief,
+// e.g. birch) stay smooth via the uBarkRelief gate.
+const float BARK_XCRACK_AROUND      = 0.9;   // around-axis cylinder radius: small → cracks run mostly
+                                             // horizontal but ragged/broken (raise → blockier scales)
+const float BARK_XCRACK_FREQ        = 1.8;   // vertical (along-arc) stacking freq → a few cracks per
+                                             // furrow run (raise → shorter, more-stacked scales)
+const float BARK_XCRACK_DEPTH       = 0.6;   // how deep the cracks cut ridge crests (× uBarkRelief × uBarkPlates)
 // BARK_CRACK_DEPTH (0.45) was the fixed voronoi crack depth; it is now the uBarkPlates
 // gene (ridges↔plates morphology), whose 0.45 identity default reproduces this value.
 // BARK_CRACK_DEPTH (0.45) was the fixed voronoi crack depth; it is now the uBarkPlates
@@ -531,7 +544,19 @@ float barkFurrowHeight(float around, float alongArc, float alongGlobal) {
     fp += vec3(barkNoise(fp * 0.5 + vec3(1.7)),
                barkNoise(fp * 0.5 + vec3(8.3)),
                barkNoise(fp * 0.5 + vec3(4.2))) * BARK_FURROW_WARP;
-    return ridgedFBM(fp, 1.0, 0.0);                // [0,1] organic ridged-FBM bark, seamless
+    float h = ridgedFBM(fp, 1.0, 0.0);             // [0,1] organic ridged-FBM bark, seamless
+
+    // S1 — horizontal cross-fractures: chop the vertical ridges into stacked oak scales. Sampled on
+    // the SAME seamless cylinder (cos/sin of the furrow angle → no wrap seam); the 3-D noise varies
+    // around the trunk so the cracks stagger (ragged, never clean rings). Cuts only ridge CRESTS
+    // (smoothstep gate) so existing furrows stay deep. uBarkPlates × uBarkRelief drives it: 0 = strict
+    // no-op (continuous ridges, byte-identical), ~0.45 default = moderate scaling, 1 = strongly plated.
+    vec3  xc    = vec3(cos(ang) * BARK_XCRACK_AROUND, alongArc * BARK_XCRACK_FREQ, sin(ang) * BARK_XCRACK_AROUND);
+    float crack = 1.0 - abs(barkNoise(xc + vec3(7.0)));
+    crack = crack * crack * crack;                 // thin recessed crack line
+    h -= uBarkRelief * uBarkPlates * BARK_XCRACK_DEPTH * crack * smoothstep(0.45, 0.78, h);
+
+    return clamp(h, 0.0, 1.0);
 }
 
 // Combined bark RELIEF height — the height field the NORMAL follows: the FBM ridge field
@@ -916,7 +941,7 @@ export function createBarkMaterial() {
     // Stable cache key so three.js never recompiles this variant unnecessarily.
     // Bumped from 'bark-windskin' → 'bark-windskin-colorpattern' for the
     // barkColor/barkPattern uniform additions so stale cached programs are not reused.
-    material.customProgramCacheKey = () => 'bark-windskin-orthoBark-woody-orient-plates-shed-radius-dbgN';
+    material.customProgramCacheKey = () => 'bark-windskin-orthoBark-woody-orient-plates-shed-radius-dbgN-xcrack';
 
     material.onBeforeCompile = (shader) => {
         // Merge our genome uniforms into the shader's uniform map.
