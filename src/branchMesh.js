@@ -472,6 +472,12 @@ export function buildBranchGeometry(graph, opts = {}) {
   // length(vObjPos.xz) measured distance from the world Y-axis, which is wrong on any
   // leaning/offset trunk — it varied the texture frequency wildly around the trunk.)
   const radii = new Float32Array(totalV);
+  // Per-vertex branch FRAME (parallel-transported), so the bark shader can sample its pattern
+  // in a coordinate that FOLLOWS the branch axis instead of world-Y. tangents = the branch
+  // axial direction (T = u×v); frameUs = one cross-section basis (u). Both are constant around
+  // a ring and vary along the branch (rotation-minimizing), so they interpolate smoothly.
+  const tangents = new Float32Array(totalV * 3);
+  const frameUs  = new Float32Array(totalV * 3);
 
   // Per-node AO — deterministic, geometry-only (no rng):
   //   - Inner / thick nodes (low branchLevel, large radius) are more occluded.
@@ -678,7 +684,8 @@ export function buildBranchGeometry(graph, opts = {}) {
   // boneIdx: which wind-bone (chain index) this vertex belongs to.
   // boneFrac: normalized arc position along the chain [0=pivot, 1=chain end].
   // -------------------------------------------------------------------------
-  function writeVertex(px, py, pz, nx, ny, nz, u, v, aoVal, windWeightVal, boneIdx, boneFrac, radiusVal) {
+  function writeVertex(px, py, pz, nx, ny, nz, u, v, aoVal, windWeightVal, boneIdx, boneFrac, radiusVal,
+                       tx, ty, tz, fux, fuy, fuz) {
     const vi = vCursor;
     positions[vi*3]   = px;
     positions[vi*3+1] = py;
@@ -693,6 +700,13 @@ export function buildBranchGeometry(graph, opts = {}) {
     boneIndexAttr[vi]    = boneIdx;
     boneFractionAttr[vi] = boneFrac;
     radii[vi]      = radiusVal || 0;
+    // Branch frame (T = axis, u = cross-section basis). Default to world-Y up / X if absent.
+    tangents[vi*3]   = (tx !== undefined) ? tx : 0;
+    tangents[vi*3+1] = (tx !== undefined) ? ty : 1;
+    tangents[vi*3+2] = (tx !== undefined) ? tz : 0;
+    frameUs[vi*3]    = (fux !== undefined) ? fux : 1;
+    frameUs[vi*3+1]  = (fux !== undefined) ? fuy : 0;
+    frameUs[vi*3+2]  = (fux !== undefined) ? fuz : 0;
     // Expand bounds
     if (px < bMinX) bMinX = px; if (px > bMaxX) bMaxX = px;
     if (py < bMinY) bMinY = py; if (py > bMaxY) bMaxY = py;
@@ -711,6 +725,11 @@ export function buildBranchGeometry(graph, opts = {}) {
   function emitRing(pos, r, u, v, segs, arcLen, aoVal, windWeightVal, boneIdx, boneFrac) {
     const firstVert = vCursor;
     const TWO_PI = 2 * Math.PI;
+    // Branch axial tangent for this ring: T = u × v (frame is orthonormal). Constant for all
+    // vertices in the ring; baked per-vertex so the bark shader can align its pattern to it.
+    const tgx = u[1]*v[2] - u[2]*v[1];
+    const tgy = u[2]*v[0] - u[0]*v[2];
+    const tgz = u[0]*v[1] - u[1]*v[0];
     for (let j = 0; j < segs; j++) {
       const theta = (j / segs) * TWO_PI;
       const ct = Math.cos(theta);
@@ -739,7 +758,8 @@ export function buildBranchGeometry(graph, opts = {}) {
       }
 
       const uCoord = j / segs;
-      writeVertex(px, py, pz, nx, ny, nz, uCoord, arcLen, aoVal, windWeightVal, boneIdx, boneFrac, r);
+      writeVertex(px, py, pz, nx, ny, nz, uCoord, arcLen, aoVal, windWeightVal, boneIdx, boneFrac, r,
+                  tgx, tgy, tgz, u[0], u[1], u[2]);
     }
     return firstVert;
   }
@@ -826,6 +846,18 @@ export function buildBranchGeometry(graph, opts = {}) {
     chainTotalArcFromPivot[ci] = arc > 1e-12 ? arc : 1; // avoid div-by-zero
   }
 
+  // Per-node frame storage so a child chain can INHERIT its parent's parallel-transport frame
+  // across a fork (continuous bark around-coordinate → no furrow seam at branch junctions).
+  // Filled as each chain emits its rings; chains are processed parent-before-child (bone order),
+  // so a child's fork node already has the parent's frame stored when the child starts.
+  const nodeFrameU   = new Float32Array(nodes.length * 3);
+  const nodeFrameT   = new Float32Array(nodes.length * 3);
+  const nodeFrameSet = new Uint8Array(nodes.length);
+  // Global arc length from the root (continuous ACROSS forks), inherited at a chain's start node
+  // like the frame, so UV.v doesn't reset at junctions → no bark texture seam at forks.
+  const nodeArc      = new Float32Array(nodes.length);
+  const nodeArcSet   = new Uint8Array(nodes.length);
+
   for (let ci = 0; ci < chains.length; ci++) {
     const chain = chains[ci];
     const N = chain.length;
@@ -852,9 +884,27 @@ export function buildBranchGeometry(graph, opts = {}) {
       tangent = [0, 1, 0];
     }
 
-    // Initialize frame via perpTo.
-    let frameU = perpTo(tangent);
-    let frameV = v3norm(v3cross(tangent, frameU));
+    // Initialize the frame. If the chain's start node already carries a frame (its parent
+    // chain emitted it at the fork), INHERIT it — transport the parent's frame from its tangent
+    // at the fork to this chain's start tangent — so the bark around-coordinate flows across the
+    // junction instead of jumping (the fork-seam fix). Otherwise (root chain) fall back to perpTo.
+    let frameU, frameV;
+    const startNode = chain[0];
+    if (nodeFrameSet[startNode]) {
+      const pU = [nodeFrameU[startNode*3], nodeFrameU[startNode*3+1], nodeFrameU[startNode*3+2]];
+      const pT = [nodeFrameT[startNode*3], nodeFrameT[startNode*3+1], nodeFrameT[startNode*3+2]];
+      const pV = v3norm(v3cross(pT, pU));
+      const tr = transportFrame(pT, tangent, pU, pV);
+      frameU = v3norm(tr[0]);
+      frameV = v3norm(v3cross(tangent, frameU));
+    } else {
+      frameU = perpTo(tangent);
+      frameV = v3norm(v3cross(tangent, frameU));
+    }
+
+    // Global arc from root for this chain's start (inherited from the parent fork node like the
+    // frame), so UV.v is continuous across forks → no bark texture seam at junctions.
+    const globalArcStart = nodeArcSet[startNode] ? nodeArc[startNode] : 0;
 
     // Single-node chain: minimal geometry.
     if (N === 1) {
@@ -862,13 +912,22 @@ export function buildBranchGeometry(graph, opts = {}) {
       const r = Math.max(node.radius, minRadius);
       const singleNodeAO = nodeAO[chain[0]];
       const singleNodeWW = nodeWindWeight[chain[0]];
+      // Record frame so anything forking from this node inherits it — but don't overwrite a
+      // frame the parent already set (preserve a shared fork node's parent frame for siblings).
+      if (nodeFrameSet[chain[0]] === 0) {
+        nodeFrameU[chain[0]*3] = frameU[0]; nodeFrameU[chain[0]*3+1] = frameU[1]; nodeFrameU[chain[0]*3+2] = frameU[2];
+        nodeFrameT[chain[0]*3] = tangent[0]; nodeFrameT[chain[0]*3+1] = tangent[1]; nodeFrameT[chain[0]*3+2] = tangent[2];
+        nodeFrameSet[chain[0]] = 1;
+      }
+      if (nodeArcSet[chain[0]] === 0) { nodeArc[chain[0]] = globalArcStart; nodeArcSet[chain[0]] = 1; }
       if (isTip) {
-        // Apex only; boneFraction=0 (single node, at pivot).
+        // Apex only; boneFraction=0 (single node, at pivot). UV.v = global arc start.
         writeVertex(node.pos[0], node.pos[1], node.pos[2],
-                    0, 1, 0, 0, 0, singleNodeAO, singleNodeWW, ci, 0, r);
+                    0, 1, 0, 0, globalArcStart, singleNodeAO, singleNodeWW, ci, 0, r,
+                    tangent[0], tangent[1], tangent[2], frameU[0], frameU[1], frameU[2]);
       } else {
-        // One ring, no triangles; boneFraction=0.
-        emitRing(node.pos, r, frameU, frameV, segs, 0, singleNodeAO, singleNodeWW, ci, 0);
+        // One ring, no triangles; boneFraction=0. UV.v = global arc start.
+        emitRing(node.pos, r, frameU, frameV, segs, globalArcStart, singleNodeAO, singleNodeWW, ci, 0);
       }
       continue;
     }
@@ -928,8 +987,21 @@ export function buildBranchGeometry(graph, opts = {}) {
       // get boneFraction=0 (pinned at pivot, no additional displacement).
       const boneFrac = ni < pivotNi ? 0 : Math.min(1, arcFromPivot / totalArc);
 
-      const ringStart = emitRing(node.pos, r, curU, curV, segs, arcLen, nodeAO[nodeIdx], nodeWindWeight[nodeIdx], ci, boneFrac);
+      const ringStart = emitRing(node.pos, r, curU, curV, segs, globalArcStart + arcLen, nodeAO[nodeIdx], nodeWindWeight[nodeIdx], ci, boneFrac);
       ringIndices.push(ringStart);
+      // Record this node's GLOBAL arc so child chains forking here inherit a continuous UV.v
+      // (same overwrite guard as the frame: don't clobber a fork node the parent already set).
+      if (ni > 0 || nodeArcSet[nodeIdx] === 0) { nodeArc[nodeIdx] = globalArcStart + arcLen; nodeArcSet[nodeIdx] = 1; }
+      // Record this node's frame so child chains forking here inherit it. Do NOT overwrite a
+      // fork node already set by the PARENT (the shared ni===0 node): otherwise the 2nd+ sibling
+      // child would inherit the 1st child's frame (an extra rotation) and that branch's bark
+      // would come out twisted relative to the trunk. ni>0 nodes belong to this chain alone, so
+      // always store those (a grandchild forking there should inherit THIS chain's frame).
+      if (ni > 0 || nodeFrameSet[nodeIdx] === 0) {
+        nodeFrameU[nodeIdx*3] = curU[0]; nodeFrameU[nodeIdx*3+1] = curU[1]; nodeFrameU[nodeIdx*3+2] = curU[2];
+        nodeFrameT[nodeIdx*3] = prevTangent[0]; nodeFrameT[nodeIdx*3+1] = prevTangent[1]; nodeFrameT[nodeIdx*3+2] = prevTangent[2];
+        nodeFrameSet[nodeIdx] = 1;
+      }
     }
 
     // Emit quad strips between consecutive rings.
@@ -951,8 +1023,9 @@ export function buildBranchGeometry(graph, opts = {}) {
       const apexVert = writeVertex(
         tipNode.pos[0], tipNode.pos[1], tipNode.pos[2],
         apexNormal[0], apexNormal[1], apexNormal[2],
-        0.5, tipArcLen, nodeAO[chain[N-1]], nodeWindWeight[chain[N-1]], ci, tipBoneFrac,
-        Math.max(tipNode.radius || 0, minRadius)
+        0.5, globalArcStart + tipArcLen, nodeAO[chain[N-1]], nodeWindWeight[chain[N-1]], ci, tipBoneFrac,
+        Math.max(tipNode.radius || 0, minRadius),
+        prevTangent[0], prevTangent[1], prevTangent[2], curU[0], curU[1], curU[2]
       );
 
       // Fan from last ring to apex.
@@ -990,6 +1063,8 @@ export function buildBranchGeometry(graph, opts = {}) {
     ao:         ao.subarray(0, vCursor),
     windWeight: windWeight.subarray(0, vCursor),
     radii:      radii.subarray(0, vCursor),
+    tangents:   tangents.subarray(0, vCursor * 3),
+    frameUs:    frameUs.subarray(0, vCursor * 3),
     indices:    indices.subarray(0, iCursor * 3),
     vertexCount:   vCursor,
     triangleCount: iCursor,
@@ -1015,6 +1090,8 @@ function _emptyResult() {
     ao:            new Float32Array(0),
     windWeight:    new Float32Array(0),
     radii:         new Float32Array(0),
+    tangents:      new Float32Array(0),
+    frameUs:       new Float32Array(0),
     indices:       new Uint32Array(0),
     vertexCount:   0,
     triangleCount: 0,

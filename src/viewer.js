@@ -832,6 +832,9 @@ export function createViewer(canvas) {
       // barkMaterial scales its bark feature size to the true local tube radius (world
       // units) via this per-vertex 'aRadius' attribute (not the broken length(xz) proxy).
       branchGeometry.setAttribute('aRadius',  new THREE.BufferAttribute(g.radii,     1));
+      // Branch frame (parallel-transported) so bark relief follows the branch axis, not world-Y.
+      branchGeometry.setAttribute('aTangent', new THREE.BufferAttribute(g.tangents,  3));
+      branchGeometry.setAttribute('aFrameU',  new THREE.BufferAttribute(g.frameUs,   3));
       // barkMaterial wind sway reads a per-vertex 'windWeight' attribute
       // (0 = rigid trunk/roots, 1 = flexible twigs).
       branchGeometry.setAttribute('windWeight', new THREE.BufferAttribute(g.windWeight, 1));

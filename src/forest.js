@@ -37,6 +37,8 @@ function buildBranchMesh(g, material) {
   bg.setAttribute('uv',           new THREE.BufferAttribute(g.uvs,          2));
   bg.setAttribute('ao',           new THREE.BufferAttribute(g.ao,           1));
   bg.setAttribute('aRadius',      new THREE.BufferAttribute(g.radii,        1));
+  bg.setAttribute('aTangent',     new THREE.BufferAttribute(g.tangents,     3));
+  bg.setAttribute('aFrameU',      new THREE.BufferAttribute(g.frameUs,      3));
   bg.setAttribute('windWeight',   new THREE.BufferAttribute(g.windWeight,   1));
   bg.setAttribute('boneIndex',    new THREE.BufferAttribute(g.boneIndex,    1));
   bg.setAttribute('boneFraction', new THREE.BufferAttribute(g.boneFraction, 1));

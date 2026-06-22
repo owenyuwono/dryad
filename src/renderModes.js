@@ -268,6 +268,20 @@ if (gl_FragColor.a < alphaTest) discard;
     return mat;
   }
 
+  // ---------------------------------------------------------------------------
+  // Furrows mode — flow-line furrow debug view (line traces).
+  //   Bark: REAL bark material with its furrow-debug flag on → outputs the
+  //   flow-line furrow field directly (ridges pale, furrow lines dark).
+  //   Leaf: keep the real material (hide foliage to inspect bark if needed).
+  // ---------------------------------------------------------------------------
+  function applyFurrows() {
+    if (barkCtl && typeof barkCtl.setDebugFurrows === 'function') {
+      barkCtl.setDebugFurrows(true);
+      branchMesh.material = barkCtl.material;
+    }
+    if (realLeafMaterial !== null) leafMesh.material = realLeafMaterial;
+  }
+
   function applyAo() {
     if (aoBranchMat === null) {
       aoBranchMat = buildAoBranchMat();
@@ -300,6 +314,11 @@ if (gl_FragColor.a < alphaTest) discard;
     if (mode !== 'normals' && barkCtl && typeof barkCtl.setDebugNormals === 'function') {
       barkCtl.setDebugNormals(false);
     }
+    // Clear the furrow-debug flag for every mode except 'furrows' (it lives on the REAL bark
+    // material, which 'lit' restores — so it must be turned off here or it would persist).
+    if (mode !== 'furrows' && barkCtl && typeof barkCtl.setDebugFurrows === 'function') {
+      barkCtl.setDebugFurrows(false);
+    }
 
     switch (mode) {
       case 'lit':
@@ -313,6 +332,9 @@ if (gl_FragColor.a < alphaTest) discard;
         break;
       case 'normals':
         applyNormals();
+        break;
+      case 'furrows':
+        applyFurrows();
         break;
       case 'ao':
         applyAo();
