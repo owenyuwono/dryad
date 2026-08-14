@@ -4,6 +4,8 @@ A browser prototype that **procedurally generates flora** — no authored 3D mod
 
 The genome is a continuous gene vector, not a set of plant "types": grass, cactus, kelp and oak are regions of one morphospace you can slide between.
 
+> **Note on leaf rendering:** leaves come in three render modes. `cluster` — one multi-leaf sprite per anchor — is the production-style approach: it's how real-time foliage keeps instance counts sane, and it's the mode a game would ship. `single` (one card per individual leaf) and `crossed` are fidelity experiments — explorations of how far per-leaf rendering can be pushed, kept for look-dev rather than as a viable runtime technique.
+
 ## Run it
 
 ```bash
